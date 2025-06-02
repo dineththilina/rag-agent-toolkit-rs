@@ -1,0 +1,35 @@
+Helios H1 Robot — Product Specifications
+
+The Helios H1 is the flagship autonomous mobile robot from Helios Robotics.
+The specifications below are fictional and exist to support retrieval demos.
+
+Dimensions and weight
+The H1 measures 80 cm long, 55 cm wide, and 40 cm tall. It weighs 48 kilograms
+without a payload.
+
+Payload
+The maximum payload capacity is 120 kilograms. The recommended continuous
+operating payload is 90 kilograms for best battery life.
+
+Battery and runtime
+The H1 uses a 1.2 kWh lithium iron phosphate battery. On a full charge it runs
+for approximately 9 hours under typical warehouse load. A full recharge takes
+90 minutes using the Helios Dock charging station.
+
+Speed
+The maximum travel speed is 2.0 meters per second. In zones marked as
+human-shared, firmware limits the speed to 1.2 meters per second.
+
+Sensors
+The H1 has a 2D LiDAR unit for navigation, four depth cameras for obstacle
+detection, and an inertial measurement unit. It does not have a robotic arm;
+loading and unloading is handled by conveyor integrations or human operators.
+
+Connectivity
+The robot connects over Wi-Fi 6 to the Helios Fleet platform. If the network
+drops, the robot completes its current task and then waits at the nearest safe
+parking zone until connectivity returns.
+
+Warranty
+Every H1 ships with a 24-month hardware warranty. Helios Fleet subscribers on
+the Premium tier receive next-business-day replacement parts.

@@ -1,0 +1,34 @@
+Helios Fleet — Support FAQ
+
+These fictional support answers give the retrieval agent factual content to
+ground its responses.
+
+Q: How do I add a new robot to my fleet?
+A: Open the Helios Fleet dashboard, go to Fleet > Devices, and click "Pair
+Device". Scan the QR code on the back of the H1 robot. The robot appears in your
+fleet within about 30 seconds once it connects to Wi-Fi.
+
+Q: What happens if a robot loses Wi-Fi during a task?
+A: The robot finishes its current task, then drives to the nearest safe parking
+zone and waits. It resumes automatically when the network returns. No data is
+lost because tasks are cached locally on the robot.
+
+Q: Can I run robots on more than one floor?
+A: Multi-floor coordination is available on the Growth and Premium plans. You
+must map each floor separately and configure the elevator integration. The
+Starter plan is single-floor only.
+
+Q: How do I upgrade or downgrade my plan?
+A: Plan changes are made under Billing > Subscription in the dashboard. Upgrades
+take effect immediately. Downgrades take effect at the start of the next billing
+cycle so you are not charged twice.
+
+Q: What is the uptime guarantee?
+A: Only the Premium plan includes a contractual uptime guarantee, set at 99.9
+percent measured monthly. If Helios fails to meet it, affected customers receive
+service credits.
+
+Q: Who do I contact for hardware failures?
+A: Premium subscribers get next-business-day replacement parts and should
+contact their dedicated account manager. Starter and Growth customers open a
+ticket through the dashboard support panel.
