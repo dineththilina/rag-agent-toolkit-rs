@@ -1,0 +1,56 @@
+[package]
+name    = "agent-toolkit"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "agent-toolkit"
+path = "src/main.rs"
+
+[dependencies]
+# Web server
+axum            = { version = "0.7", features = ["macros"] }
+axum-extra      = { version = "0.9", features = ["typed-header"] }
+tower           = "0.4"
+tower-http      = { version = "0.5", features = ["fs", "cors", "trace"] }
+tokio           = { version = "1",   features = ["full"] }
+
+# HTTP client (for OpenAI-compatible API calls + HTTP tool)
+reqwest         = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+
+# Serialization
+serde           = { version = "1", features = ["derive"] }
+serde_json      = "1"
+
+# Config
+toml            = "0.8"
+
+# Vector store — qdrant via its REST API (no heavy SDK needed)
+# We talk to Qdrant over HTTP ourselves, keeping deps minimal.
+
+# Embeddings — we call the embeddings endpoint of the configured provider
+# (OpenAI-compatible: works with OpenAI, Ollama, LM Studio, etc.)
+
+# Text chunking (pure Rust, no ML weights)
+text-splitter   = { version = "0.17", features = ["markdown"] }
+
+# PDF text extraction
+pdf-extract     = "0.7"
+
+# Error handling
+anyhow          = "1"
+thiserror       = "1"
+
+# Logging
+tracing         = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Misc
+uuid            = { version = "1", features = ["v4"] }
+dashmap         = "6"       # concurrent session memory store
+sha2            = "0.10"    # content-hash for dedup
+
+[profile.release]
+opt-level = 3
+lto       = true
+codegen-units = 1   # smaller binary, slower compile — worth it for a release build

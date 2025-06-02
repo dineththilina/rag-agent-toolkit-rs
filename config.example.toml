@@ -1,0 +1,25 @@
+# Copy this to config.toml, or just complete the setup screen in the browser
+# (which writes config.toml for you). Every field has a default.
+
+# OpenAI-compatible API base URL.
+#   OpenAI:    https://api.openai.com/v1
+#   Groq:      https://api.groq.com/openai/v1
+#   Ollama:    http://localhost:11434/v1
+#   LM Studio: http://localhost:1234/v1
+api_base = "https://api.openai.com/v1"
+
+# API key. Leave empty for Ollama / LM Studio.
+api_key = ""
+
+# Chat model id (must exist on the chosen API — the UI fetches the live list).
+model = "gpt-4o-mini"
+
+# Embeddings: usually the same API base. Leave blank to reuse api_base.
+embeddings_base  = ""
+embeddings_model = "text-embedding-3-small"
+
+# Local Qdrant vector store.
+qdrant_url = "http://localhost:6333"
+
+# Directory of documents to ingest.
+data_dir = "data"

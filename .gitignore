@@ -1,0 +1,14 @@
+# Rust build artifacts
+/target
+
+# Local config with secrets
+config.toml
+
+# Qdrant local storage (if running embedded)
+/qdrant_storage
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
