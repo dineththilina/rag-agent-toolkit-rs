@@ -38,7 +38,7 @@ pub async fn post_chat(
         ));
     }
 
-    match agent::chat(&message, &session_id, &state.client, cfg, &state.sessions).await {
+    match agent::chat(&message, &session_id, &state.client, cfg, &state.sessions, &state.store).await {
         Ok(result) => Ok(Json(json!({
             "answer":     result.answer,
             "tools_used": result.tools_used,

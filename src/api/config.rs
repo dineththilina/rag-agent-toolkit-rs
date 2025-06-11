@@ -10,19 +10,20 @@ use axum::{
     Json,
 };
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::{json, Value};
 use tracing::{error, info};
 
 use crate::config::{self, Config, SharedConfig};
 use crate::models;
-use crate::rag;
+use crate::rag::{self, SharedStore};
 
 #[derive(Clone)]
 pub struct AppState {
-    pub cfg:     SharedConfig,
-    pub client:  Client,
+    pub cfg:      SharedConfig,
+    pub client:   Client,
     pub sessions: crate::agent::SessionStore,
+    pub store:    SharedStore,
 }
 
 // ── GET /api/config ──────────────────────────────────────────────────────────
@@ -38,7 +39,6 @@ pub async fn get_config(State(state): State<AppState>) -> Json<Value> {
             "api_key_set":      !c.api_key.is_empty(),
             "model":            c.model,
             "embeddings_model": c.embeddings_model,
-            "qdrant_url":       c.qdrant_url,
             "data_dir":         c.data_dir,
         })),
     }
@@ -54,7 +54,6 @@ pub struct ConfigPayload {
     pub embeddings_base:  Option<String>,
     pub embeddings_model: Option<String>,
     pub embeddings_key:   Option<String>,
-    pub qdrant_url:       Option<String>,
 }
 
 pub async fn post_config(
@@ -62,16 +61,14 @@ pub async fn post_config(
     Json(payload): Json<ConfigPayload>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let new_cfg = Config {
-        api_base:        payload.api_base.trim().to_string(),
-        api_key:         payload.api_key.unwrap_or_default().trim().to_string(),
-        model:           payload.model.trim().to_string(),
-        embeddings_base: payload.embeddings_base.unwrap_or_default().trim().to_string(),
+        api_base:         payload.api_base.trim().to_string(),
+        api_key:          payload.api_key.unwrap_or_default().trim().to_string(),
+        model:            payload.model.trim().to_string(),
+        embeddings_base:  payload.embeddings_base.unwrap_or_default().trim().to_string(),
         embeddings_model: payload.embeddings_model
             .unwrap_or_else(|| "text-embedding-3-small".into()),
-        embeddings_key:  payload.embeddings_key.unwrap_or_default().trim().to_string(),
-        qdrant_url:      payload.qdrant_url
-            .unwrap_or_else(|| "http://localhost:6333".into()),
-        data_dir:        "data".into(),
+        embeddings_key:   payload.embeddings_key.unwrap_or_default().trim().to_string(),
+        data_dir:         "data".into(),
     };
 
     // Validate: try fetching models to confirm the API is reachable.
@@ -82,9 +79,9 @@ pub async fn post_config(
         ));
     }
 
-    // Build the Qdrant index. This is async and may take a few seconds.
+    // Build the embedded vector index. May take a few seconds while embedding.
     info!("Building RAG index...");
-    if let Err(e) = rag::build_index(&state.client, &new_cfg).await {
+    if let Err(e) = rag::build_index(&state.client, &new_cfg, &state.store).await {
         error!("Index build failed: {e}");
         return Err((
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -92,7 +89,7 @@ pub async fn post_config(
         ));
     }
 
-    // Persist to disk.
+    // Persist config to disk.
     if let Err(e) = config::save(&new_cfg) {
         error!("Failed to save config: {e}");
     }

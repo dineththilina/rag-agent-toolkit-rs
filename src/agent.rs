@@ -93,6 +93,7 @@ pub async fn chat(
     client:     &Client,
     cfg:        &Config,
     sessions:   &SessionStore,
+    store:      &crate::rag::SharedStore,
 ) -> Result<TurnResult> {
     // Retrieve or create session history.
     let mut history: Vec<Message> = sessions
@@ -124,13 +125,18 @@ pub async fn chat(
     let mut sources:    Vec<String>   = Vec::new();
     let     tool_defs                 = tools::tool_definitions();
 
+    // Some open models (especially via Ollama) don't support tool-calling.
+    // We start with tools enabled and, if the API rejects the tools parameter,
+    // fall back to a plain-chat request so the model can still answer.
+    let mut tools_enabled = true;
+
     // Agentic loop: keep calling the model until it gives a plain text reply.
     let answer = loop {
-        let body = json!({
-            "model":    cfg.model,
-            "messages": history,
-            "tools":    tool_defs,
-        });
+        let body = if tools_enabled {
+            json!({ "model": cfg.model, "messages": history, "tools": tool_defs })
+        } else {
+            json!({ "model": cfg.model, "messages": history })
+        };
 
         let url = format!("{}/chat/completions", cfg.api_base.trim_end_matches('/'));
         let mut req = client.post(&url).json(&body);
@@ -140,6 +146,17 @@ pub async fn chat(
         if !resp.status().is_success() {
             let status = resp.status();
             let text   = resp.text().await.unwrap_or_default();
+            // If the failure looks like a tools/function-support problem and we
+            // still had tools on, retry once without them.
+            let lc = text.to_lowercase();
+            if tools_enabled && (
+                lc.contains("tool") || lc.contains("function") ||
+                lc.contains("does not support") || lc.contains("not supported")
+            ) {
+                tracing::warn!("Model rejected tools ({status}); retrying without tool-calling");
+                tools_enabled = false;
+                continue;
+            }
             anyhow::bail!("chat completions {status}: {text}");
         }
 
@@ -189,7 +206,7 @@ pub async fn chat(
 
             debug!("tool call: {} args={}", tc.function.name, args);
 
-            let result = tools::dispatch(&tc.function.name, &args, client, cfg).await;
+            let result = tools::dispatch(&tc.function.name, &args, client, cfg, store).await;
 
             // Track which tools ran and extract RAG sources.
             if tc.function.name == "search_knowledge_base" {

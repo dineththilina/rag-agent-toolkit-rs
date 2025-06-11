@@ -47,17 +47,12 @@ pub struct Config {
     #[serde(default)]
     pub embeddings_key: String,
 
-    /// Qdrant base URL. Defaults to a local instance.
-    #[serde(default = "default_qdrant_url")]
-    pub qdrant_url: String,
-
     /// Directory containing documents to ingest.
     #[serde(default = "default_data_dir")]
     pub data_dir: String,
 }
 
 fn default_embed_model() -> String { "text-embedding-3-small".into() }
-fn default_qdrant_url()   -> String { "http://localhost:6333".into() }
 fn default_data_dir()     -> String { "data".into() }
 
 impl Config {
@@ -89,7 +84,6 @@ impl Default for Config {
             embeddings_base:  String::new(),
             embeddings_model: default_embed_model(),
             embeddings_key:   String::new(),
-            qdrant_url:       default_qdrant_url(),
             data_dir:         default_data_dir(),
         }
     }

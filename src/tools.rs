@@ -14,7 +14,7 @@ use serde_json::{json, Value};
 use tracing::debug;
 
 use crate::config::Config;
-use crate::rag;
+use crate::rag::{self, SharedStore};
 
 // ── Tool schemas (sent to the model in every chat request) ───────────────────
 
@@ -83,12 +83,13 @@ pub async fn dispatch(
     args:   &Value,
     client: &Client,
     cfg:    &Config,
+    store:  &SharedStore,
 ) -> String {
     debug!("tool dispatch: {name} args={args}");
     match name {
         "search_knowledge_base" => {
             let query = args["query"].as_str().unwrap_or("").to_string();
-            run_rag(&query, client, cfg).await
+            run_rag(&query, client, cfg, store).await
         }
         "calculator" => {
             let expr = args["expression"].as_str().unwrap_or("").to_string();
@@ -104,8 +105,8 @@ pub async fn dispatch(
 
 // ── Tool 1: RAG ──────────────────────────────────────────────────────────────
 
-async fn run_rag(query: &str, client: &Client, cfg: &Config) -> String {
-    match rag::retrieve(client, cfg, query, 4).await {
+async fn run_rag(query: &str, client: &Client, cfg: &Config, store: &SharedStore) -> String {
+    match rag::retrieve(client, cfg, store, query, 4).await {
         Err(e) => format!("Knowledge base search failed: {e}"),
         Ok(hits) if hits.is_empty() => "No relevant documents found.".into(),
         Ok(hits) => hits

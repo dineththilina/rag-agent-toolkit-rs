@@ -25,8 +25,8 @@ serde_json      = "1"
 # Config
 toml            = "0.8"
 
-# Vector store — qdrant via its REST API (no heavy SDK needed)
-# We talk to Qdrant over HTTP ourselves, keeping deps minimal.
+# Vector store — embedded in-process (Vec + cosine similarity), persisted to
+# vectors.json. No external database, no Docker.
 
 # Embeddings — we call the embeddings endpoint of the configured provider
 # (OpenAI-compatible: works with OpenAI, Ollama, LM Studio, etc.)

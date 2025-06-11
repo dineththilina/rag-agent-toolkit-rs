@@ -33,7 +33,7 @@ pub async fn post_rag(
         return Err((StatusCode::BAD_REQUEST, Json(json!({ "error": "query is required" }))));
     }
 
-    match rag::retrieve(&state.client, cfg, &query, 6).await {
+    match rag::retrieve(&state.client, cfg, &state.store, &query, 6).await {
         Ok(hits) => Ok(Json(json!({ "results": hits, "query": query }))),
         Err(e)   => Err((
             StatusCode::INTERNAL_SERVER_ERROR,

@@ -74,22 +74,27 @@ async fn main() -> anyhow::Result<()> {
         .timeout(std::time::Duration::from_secs(120))
         .build()?;
 
-    // If we have a config, pre-build the Qdrant index in the background.
-    if let Some(ref cfg) = initial_cfg {
+    // Shared, in-process vector store (no external DB).
+    let store = rag::new_shared_store();
+
+    let state = AppState {
+        cfg:      config::new_shared(initial_cfg.clone()),
+        client:   http_client.clone(),
+        sessions: agent::new_session_store(),
+        store:    store.clone(),
+    };
+
+    // If we already have a config, build the embedded index in the background
+    // so the first chat/RAG request is fast. Reuses vectors.json if valid.
+    if let Some(cfg) = initial_cfg {
         let client = http_client.clone();
-        let cfg    = cfg.clone();
+        let store  = store.clone();
         tokio::spawn(async move {
-            if let Err(e) = rag::build_index(&client, &cfg).await {
+            if let Err(e) = rag::build_index(&client, &cfg, &store).await {
                 warn!("Background index build failed: {e}");
             }
         });
     }
-
-    let state = AppState {
-        cfg:      config::new_shared(initial_cfg),
-        client:   http_client,
-        sessions: agent::new_session_store(),
-    };
 
     let cors = CorsLayer::new().allow_origin(Any).allow_methods(Any).allow_headers(Any);
 

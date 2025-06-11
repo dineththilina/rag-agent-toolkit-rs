@@ -1,29 +1,34 @@
 // src/rag.rs
 //
-// RAG pipeline:
+// RAG pipeline with an EMBEDDED vector store — no external database, no Docker.
+//
 //   1. Load documents from data/ (txt, md, pdf)
 //   2. Chunk with text-splitter (pure Rust, no ML weights)
 //   3. Embed chunks via the configured embeddings endpoint
-//   4. Upsert into Qdrant (local Docker or binary)
-//   5. retrieve(query) -> Vec<Hit>
+//   4. Store vectors in-process (Vec) and persist to vectors.json
+//   5. retrieve(query) -> brute-force cosine similarity -> Vec<Hit>
 //
-// Qdrant is used because it runs as a single ~50 MB binary or tiny Docker
-// image, has a clean REST API, and needs zero Python. The Qdrant Rust SDK
-// is intentionally avoided here; we talk to the REST API directly with
-// reqwest to keep the dependency tree small.
+// For a demo-scale corpus (hundreds to low-thousands of chunks), brute-force
+// cosine over an in-memory Vec is faster than a network round-trip to a vector
+// DB and needs zero setup. The index persists to a single JSON file so it
+// survives restarts; delete vectors.json (or change the docs) to force a
+// rebuild.
 
 use anyhow::{Context, Result};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::path::Path;
+use std::sync::Arc;
 use text_splitter::TextSplitter;
+use tokio::sync::RwLock;
 use tracing::{info, warn};
 
 use crate::config::Config;
 
-const COLLECTION: &str = "agent_toolkit";
+// Where the persisted index lives, next to the binary.
+const STORE_PATH: &str = "vectors.json";
 // text-splitter sizes chunks by character count. 700 chars keeps each passage
 // focused while staying well under typical embedding token limits.
 const CHUNK_SIZE: usize = 700;
@@ -35,6 +40,32 @@ pub struct Hit {
     pub text:   String,
     pub source: String,
     pub score:  f32,
+}
+
+/// One stored chunk: its text, source file, content hash, and embedding vector.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct StoredChunk {
+    text:      String,
+    source:    String,
+    hash:      String,
+    embedding: Vec<f32>,
+}
+
+/// The on-disk / in-memory index. `fingerprint` identifies the corpus + embed
+/// model so we know whether a persisted index is still valid for the current
+/// config and documents.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct VectorStore {
+    fingerprint: String,
+    chunks:      Vec<StoredChunk>,
+}
+
+/// Shared, hot-swappable store. Built once at startup (or after config save),
+/// then read concurrently by every /chat and /rag request.
+pub type SharedStore = Arc<RwLock<VectorStore>>;
+
+pub fn new_shared_store() -> SharedStore {
+    Arc::new(RwLock::new(VectorStore::default()))
 }
 
 // ── Document loading ─────────────────────────────────────────────────────────
@@ -86,11 +117,10 @@ fn load_all(data_dir: &str) -> Result<Vec<Doc>> {
 struct Chunk {
     source: String,
     text:   String,
-    id:     String,   // sha256 of content for dedup
+    hash:   String,
 }
 
 fn chunk_docs(docs: Vec<Doc>) -> Vec<Chunk> {
-    // text-splitter uses character count as the size unit.
     let splitter = TextSplitter::new(CHUNK_SIZE);
     let mut chunks = Vec::new();
 
@@ -101,28 +131,24 @@ fn chunk_docs(docs: Vec<Doc>) -> Vec<Chunk> {
 
             let mut hasher = Sha256::new();
             hasher.update(trimmed.as_bytes());
-            let id = format!("{:x}", hasher.finalize())[..16].to_string();
+            let hash = format!("{:x}", hasher.finalize())[..16].to_string();
 
-            chunks.push(Chunk {
-                source: doc.source.clone(),
-                text:   trimmed,
-                id,
-            });
+            chunks.push(Chunk { source: doc.source.clone(), text: trimmed, hash });
         }
     }
     chunks
 }
 
-// ── Embeddings ───────────────────────────────────────────────────────────────
+// ── Embeddings (provider-agnostic, OpenAI-compatible wire format) ────────────
 
 async fn embed_batch(
-    client:  &Client,
-    base:    &str,
-    key:     &str,
-    model:   &str,
-    texts:   &[String],
+    client: &Client,
+    base:   &str,
+    key:    &str,
+    model:  &str,
+    texts:  &[String],
 ) -> Result<Vec<Vec<f32>>> {
-    let url = format!("{}/embeddings", base.trim_end_matches('/'));
+    let url  = format!("{}/embeddings", base.trim_end_matches('/'));
     let body = json!({ "model": model, "input": texts });
 
     let mut req = client.post(&url).json(&body);
@@ -155,68 +181,56 @@ async fn embed_one(
     batch.pop().context("empty embedding response")
 }
 
-// ── Qdrant helpers ───────────────────────────────────────────────────────────
+// ── Cosine similarity ────────────────────────────────────────────────────────
 
-async fn qdrant_collection_exists(client: &Client, base: &str) -> bool {
-    let url  = format!("{}/collections/{}", base.trim_end_matches('/'), COLLECTION);
-    client.get(&url).send().await.map(|r| r.status().is_success()).unwrap_or(false)
+fn cosine(a: &[f32], b: &[f32]) -> f32 {
+    if a.len() != b.len() || a.is_empty() {
+        return 0.0;
+    }
+    let mut dot = 0.0f32;
+    let mut na  = 0.0f32;
+    let mut nb  = 0.0f32;
+    for i in 0..a.len() {
+        dot += a[i] * b[i];
+        na  += a[i] * a[i];
+        nb  += b[i] * b[i];
+    }
+    if na == 0.0 || nb == 0.0 {
+        return 0.0;
+    }
+    dot / (na.sqrt() * nb.sqrt())
 }
 
-async fn qdrant_create_collection(client: &Client, base: &str, dim: usize) -> Result<()> {
-    let url  = format!("{}/collections/{}", base.trim_end_matches('/'), COLLECTION);
-    let body = json!({
-        "vectors": {
-            "size": dim,
-            "distance": "Cosine"
-        }
-    });
-    let resp = client.put(&url).json(&body).send().await?;
-    if !resp.status().is_success() {
-        let text = resp.text().await.unwrap_or_default();
-        anyhow::bail!("creating Qdrant collection: {text}");
-    }
+// ── Persistence ──────────────────────────────────────────────────────────────
+
+fn load_persisted() -> Option<VectorStore> {
+    let text = std::fs::read_to_string(STORE_PATH).ok()?;
+    serde_json::from_str(&text).ok()
+}
+
+fn save_persisted(store: &VectorStore) -> Result<()> {
+    let text = serde_json::to_string(store).context("serializing vector store")?;
+    std::fs::write(STORE_PATH, text).context("writing vectors.json")?;
     Ok(())
 }
 
-async fn qdrant_upsert(
-    client: &Client,
-    base:   &str,
-    points: Vec<Value>,
-) -> Result<()> {
-    let url  = format!("{}/collections/{}/points", base.trim_end_matches('/'), COLLECTION);
-    let body = json!({ "points": points });
-    let resp = client.put(&url).json(&body).send().await?;
-    if !resp.status().is_success() {
-        let text = resp.text().await.unwrap_or_default();
-        anyhow::bail!("Qdrant upsert: {text}");
+/// A fingerprint of the corpus + embed model. If this changes, the persisted
+/// index is stale and we rebuild. It combines the embed model name and a hash
+/// of every chunk's content hash, so adding/editing docs invalidates the index.
+fn fingerprint(embed_model: &str, chunks: &[Chunk]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(embed_model.as_bytes());
+    for c in chunks {
+        hasher.update(c.hash.as_bytes());
     }
-    Ok(())
-}
-
-async fn qdrant_count(client: &Client, base: &str) -> Result<u64> {
-    let url  = format!("{}/collections/{}", base.trim_end_matches('/'), COLLECTION);
-    let resp = client.get(&url).send().await?;
-    if !resp.status().is_success() { return Ok(0); }
-    let v: Value = resp.json().await?;
-    Ok(v["result"]["vectors_count"].as_u64().unwrap_or(0))
+    format!("{:x}", hasher.finalize())[..24].to_string()
 }
 
 // ── Public: build index ──────────────────────────────────────────────────────
 
-/// Ingest all documents in data_dir into Qdrant.
-/// Skips the ingest if the collection already has vectors (idempotent).
-pub async fn build_index(client: &Client, cfg: &Config) -> Result<()> {
-    let qdrant = &cfg.qdrant_url;
-
-    // If the collection already has content, don't re-embed.
-    if qdrant_collection_exists(client, qdrant).await {
-        let count = qdrant_count(client, qdrant).await?;
-        if count > 0 {
-            info!("Qdrant collection already has {count} vectors, skipping ingest");
-            return Ok(());
-        }
-    }
-
+/// Build the in-memory vector store, reusing a persisted index when the corpus
+/// and embed model are unchanged. Populates the shared store in place.
+pub async fn build_index(client: &Client, cfg: &Config, store: &SharedStore) -> Result<()> {
     info!("Loading documents from '{}'", cfg.data_dir);
     let docs   = load_all(&cfg.data_dir)?;
     let chunks = chunk_docs(docs);
@@ -226,7 +240,19 @@ pub async fn build_index(client: &Client, cfg: &Config) -> Result<()> {
         anyhow::bail!("No chunks produced — is '{}' empty?", cfg.data_dir);
     }
 
-    // Embed in batches of 32.
+    let fp = fingerprint(&cfg.embeddings_model, &chunks);
+
+    // Reuse a persisted index if it matches the current corpus + embed model.
+    if let Some(persisted) = load_persisted() {
+        if persisted.fingerprint == fp && !persisted.chunks.is_empty() {
+            info!("Reusing persisted index ({} chunks)", persisted.chunks.len());
+            *store.write().await = persisted;
+            return Ok(());
+        }
+        info!("Persisted index is stale, rebuilding");
+    }
+
+    // Embed all chunks in batches.
     let emb_base  = cfg.effective_embeddings_base();
     let emb_key   = cfg.effective_embeddings_key();
     let emb_model = &cfg.embeddings_model;
@@ -239,81 +265,54 @@ pub async fn build_index(client: &Client, cfg: &Config) -> Result<()> {
     }
 
     let dim = all_vecs.first().map(|v| v.len()).unwrap_or(0);
-    info!("Embedding dim: {dim}");
+    info!("Embedded {} chunks (dim {dim})", all_vecs.len());
 
-    // Create or recreate the collection.
-    if qdrant_collection_exists(client, qdrant).await {
-        // Delete and recreate to ensure correct dimensions.
-        let url = format!("{}/collections/{}", qdrant.trim_end_matches('/'), COLLECTION);
-        client.delete(&url).send().await.ok();
-    }
-    qdrant_create_collection(client, qdrant, dim).await?;
-
-    // Build Qdrant point objects.
-    let points: Vec<Value> = chunks
-        .iter()
-        .zip(all_vecs.iter())
-        .enumerate()
-        .map(|(i, (chunk, vec))| {
-            json!({
-                "id": i,
-                "vector": vec,
-                "payload": {
-                    "text":   chunk.text,
-                    "source": chunk.source,
-                    "hash":   chunk.id,
-                }
-            })
+    let stored: Vec<StoredChunk> = chunks
+        .into_iter()
+        .zip(all_vecs.into_iter())
+        .map(|(c, embedding)| StoredChunk {
+            text: c.text, source: c.source, hash: c.hash, embedding,
         })
         .collect();
 
-    // Upsert in batches of 100.
-    for batch in points.chunks(100) {
-        qdrant_upsert(client, qdrant, batch.to_vec()).await?;
-    }
+    let new_store = VectorStore { fingerprint: fp, chunks: stored };
 
-    info!("Indexed {} chunks into Qdrant", chunks.len());
+    // Persist for next launch, then swap into shared state.
+    if let Err(e) = save_persisted(&new_store) {
+        warn!("Could not persist vectors.json: {e}");
+    }
+    *store.write().await = new_store;
+
+    info!("Index ready");
     Ok(())
 }
 
 // ── Public: retrieve ─────────────────────────────────────────────────────────
 
 pub async fn retrieve(
-    client:  &Client,
-    cfg:     &Config,
-    query:   &str,
-    k:       usize,
+    client: &Client,
+    cfg:    &Config,
+    store:  &SharedStore,
+    query:  &str,
+    k:      usize,
 ) -> Result<Vec<Hit>> {
     let emb_base  = cfg.effective_embeddings_base();
     let emb_key   = cfg.effective_embeddings_key();
     let query_vec = embed_one(client, emb_base, emb_key, &cfg.embeddings_model, query).await?;
 
-    let url  = format!("{}/collections/{}/points/search", cfg.qdrant_url.trim_end_matches('/'), COLLECTION);
-    let body = json!({
-        "vector": query_vec,
-        "limit":  k,
-        "with_payload": true,
-    });
-
-    let resp = client.post(&url).json(&body).send().await
-        .context("Qdrant search")?;
-
-    if !resp.status().is_success() {
-        let text = resp.text().await.unwrap_or_default();
-        anyhow::bail!("Qdrant search error: {text}");
+    let guard = store.read().await;
+    if guard.chunks.is_empty() {
+        anyhow::bail!("Vector store is empty — index may still be building.");
     }
 
-    #[derive(Deserialize)]
-    struct SearchResp { result: Vec<SearchHit> }
-    #[derive(Deserialize)]
-    struct SearchHit  { score: f32, payload: HitPayload }
-    #[derive(Deserialize)]
-    struct HitPayload { text: String, source: String }
+    // Score every chunk by cosine similarity, then take the top k.
+    let mut scored: Vec<Hit> = guard.chunks.iter().map(|c| Hit {
+        text:   c.text.clone(),
+        source: c.source.clone(),
+        score:  cosine(&query_vec, &c.embedding),
+    }).collect();
 
-    let parsed: SearchResp = resp.json().await.context("parsing Qdrant search response")?;
-    Ok(parsed.result.into_iter().map(|h| Hit {
-        text:   h.payload.text,
-        source: h.payload.source,
-        score:  h.score,
-    }).collect())
+    scored.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    scored.truncate(k);
+    Ok(scored)
 }

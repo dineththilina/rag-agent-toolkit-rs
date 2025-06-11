@@ -280,16 +280,6 @@ textarea:focus{outline:none;border-color:var(--accent);}
     </div>
   </details>
 
-  <div class="field">
-    <label>Qdrant URL <span style="font-weight:400;color:var(--muted)">(local vector store)</span></label>
-    <input class="inp" id="qdrant-url" type="text"
-      placeholder="http://localhost:6333"
-      value="http://localhost:6333"/>
-    <div class="setup-hint">
-      Run with: <code>docker run -p 6333:6333 qdrant/qdrant</code>
-    </div>
-  </div>
-
   <button class="btn" id="save-btn" onclick="saveConfig()">
     <span class="spinner"></span>
     <span class="lbl">Save &amp; start →</span>
@@ -504,7 +494,6 @@ async function saveConfig() {
   const emb   = document.getElementById('emb-model').value.trim();
   const embBase = document.getElementById('emb-base').value.trim();
   const embKey  = document.getElementById('emb-key').value.trim();
-  const qd    = document.getElementById('qdrant-url').value.trim();
 
   if (!base)  { showSetupErr('API base URL is required.'); return; }
   if (!model) { showSetupErr('Select or type a model.'); return; }
@@ -524,7 +513,6 @@ async function saveConfig() {
         embeddings_model: emb || null,
         embeddings_base:  embBase || null,
         embeddings_key:   embKey || null,
-        qdrant_url: qd || null,
       }),
     });
     const d = await r.json();
