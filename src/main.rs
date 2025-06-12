@@ -14,7 +14,6 @@ mod rag;
 mod tools;
 
 use std::net::SocketAddr;
-use std::sync::Arc;
 
 use axum::{
     http::StatusCode,
@@ -26,7 +25,7 @@ use reqwest::Client;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 use tracing::{info, warn};
-use tracing_subscriber::{fmt, EnvFilter};
+use tracing_subscriber::EnvFilter;
 
 use api::config::{AppState, get_config, get_models, post_config};
 use api::chat::post_chat;

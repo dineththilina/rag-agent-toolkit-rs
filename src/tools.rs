@@ -263,7 +263,7 @@ async fn run_country_facts(country: &str, client: &Client) -> String {
                       .and_then(|v| v.as_str())
                       .unwrap_or("unknown");
     let pop       = c["population"].as_u64()
-                      .map(|p| format!("{p:,}"))
+                      .map(group_thousands)
                       .unwrap_or_else(|| "unknown".into());
     let region    = c["region"].as_str().unwrap_or("unknown");
     let currency  = c["currencies"].as_object()
@@ -272,6 +272,21 @@ async fn run_country_facts(country: &str, client: &Client) -> String {
                       .unwrap_or("unknown");
 
     format!("{name}: capital {capital}, population ~{pop}, region {region}, currency {currency}.")
+}
+
+/// Format an integer with comma thousands separators (Rust has no built-in for this).
+fn group_thousands(n: u64) -> String {
+    let digits = n.to_string();
+    let bytes  = digits.as_bytes();
+    let mut out = String::new();
+    let len = bytes.len();
+    for (i, b) in bytes.iter().enumerate() {
+        if i > 0 && (len - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(*b as char);
+    }
+    out
 }
 
 // We need this crate for URL encoding.
