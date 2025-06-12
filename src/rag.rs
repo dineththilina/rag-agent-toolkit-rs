@@ -53,9 +53,10 @@ struct StoredChunk {
 
 /// The on-disk / in-memory index. `fingerprint` identifies the corpus + embed
 /// model so we know whether a persisted index is still valid for the current
-/// config and documents.
+/// config and documents. Public so the `SharedStore` alias can cross module
+/// boundaries; its fields stay private to this module.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-struct VectorStore {
+pub struct VectorStore {
     fingerprint: String,
     chunks:      Vec<StoredChunk>,
 }
