@@ -66,15 +66,21 @@ change.
    ```bash
    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
    ```
-2. **An OpenAI-compatible API.** Any of:
-   - OpenAI key, base `https://api.openai.com/v1`
-   - Groq (free) key, base `https://api.groq.com/openai/v1`
-   - Ollama (fully local, no key), base `http://localhost:11434/v1`
-     — run `ollama pull llama3.2` and `ollama pull nomic-embed-text` first
+2. **A model to talk to.** The app defaults to a local **Ollama**, which is the
+   zero-key, fully-local option:
+   ```bash
+   # install Ollama from https://ollama.com, then:
+   ollama pull llama3.2
+   ollama pull nomic-embed-text
+   ```
+   Prefer a hosted provider instead? You don't need Ollama at all — just open
+   Settings in the app and point it at any OpenAI-compatible API:
+   - OpenAI, base `https://api.openai.com/v1`
+   - Groq (free), base `https://api.groq.com/openai/v1`
    - LM Studio (local), base `http://localhost:1234/v1`
    - OpenRouter, Together, Fireworks, etc.
 
-That's the whole list. No Docker, no database.
+No Docker, no database — the vector store is embedded in the binary.
 
 ---
 
@@ -85,9 +91,30 @@ cargo run --release
 # or: bash run.sh
 ```
 
-Then open **http://localhost:3000**. The setup screen appears on first launch.
-Enter your API base + key, click **Fetch models**, pick one, and hit
-**Save & start**. The index builds (a few seconds) and the chat UI loads.
+Then open **http://localhost:3000**. The app boots **straight into the chat
+interface** — no setup screen.
+
+By default it talks to a local **Ollama** model (`llama3.2`), so if you have
+Ollama running with the models pulled, you can chat immediately with zero
+configuration:
+
+```bash
+# one-time, in another terminal:
+ollama pull llama3.2
+ollama pull nomic-embed-text
+ollama serve   # if it isn't already running
+```
+
+If Ollama isn't running, the chat still loads and shows a single friendly line
+telling you to either start Ollama or open **Settings** (the gear icon) to use
+OpenAI, Groq, or another provider. No wall of forms.
+
+### Switching providers
+
+Click the gear icon to open Settings. Pick a quick preset (Ollama, OpenAI, Groq,
+LM Studio), or type any OpenAI-compatible API address and key. Click "See
+available" to pull the live model list from that endpoint, choose one, and Save.
+Everything is tucked in a slide-over panel — it never blocks the chat.
 
 ---
 

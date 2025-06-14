@@ -20,86 +20,21 @@ body{background:var(--bg);color:var(--text);
   font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
   font-size:15px;line-height:1.5;height:100dvh;display:flex;flex-direction:column;overflow:hidden;}
 
-/* ── Screens ── */
-.screen{display:none;flex:1;flex-direction:column;overflow:hidden;}
-.screen.active{display:flex;}
-
-/* ══ SETUP SCREEN ══════════════════════════════════════════════════ */
-#screen-setup{align-items:center;justify-content:center;padding:24px;}
-.setup-card{background:var(--panel);border:1px solid var(--border);border-radius:20px;
-  padding:36px 40px;width:100%;max-width:460px;display:flex;flex-direction:column;gap:20px;}
-.setup-logo{display:flex;align-items:center;gap:10px;}
-.setup-logo .dot{width:10px;height:10px;border-radius:50%;background:var(--accent);
-  box-shadow:0 0 12px var(--accent);}
-.setup-logo h1{font-size:1.1rem;font-weight:600;}
-.setup-sub{font-size:.85rem;color:var(--muted);}
-
-.field{display:flex;flex-direction:column;gap:6px;}
-.field label{font-size:.73rem;font-weight:500;color:var(--muted);
-  text-transform:uppercase;letter-spacing:.5px;}
-.field-row{display:flex;gap:8px;}
-.inp{background:var(--panel2);color:var(--text);border:1px solid var(--border);
-  border-radius:9px;padding:10px 13px;font:inherit;font-size:.9rem;
-  transition:border-color .12s;width:100%;}
-.inp:focus{outline:none;border-color:var(--accent);}
-.inp::placeholder{color:var(--muted);}
-.inp-pw{padding-right:44px;}
-.inp-wrap{position:relative;display:flex;align-items:center;}
-.eye{position:absolute;right:11px;background:none;border:none;cursor:pointer;
-  color:var(--muted);font-size:.9rem;padding:3px;transition:color .12s;}
-.eye:hover{color:var(--text);}
-
-/* Live model selector */
-.model-area{display:flex;flex-direction:column;gap:8px;}
-.fetch-row{display:flex;gap:8px;align-items:flex-end;}
-.fetch-row .inp{flex:1;}
-.btn-fetch{background:var(--panel3);color:var(--text);border:1px solid var(--border);
-  border-radius:9px;padding:10px 14px;font:inherit;font-size:.85rem;font-weight:500;
-  cursor:pointer;white-space:nowrap;transition:border-color .12s,background .12s;}
-.btn-fetch:hover{border-color:var(--muted);}
-.btn-fetch:disabled{opacity:.4;cursor:not-allowed;}
-.model-list{display:flex;flex-direction:column;gap:4px;max-height:180px;
-  overflow-y:auto;border:1px solid var(--border);border-radius:9px;background:var(--panel2);}
-.model-opt{padding:9px 13px;cursor:pointer;font-size:.88rem;border-radius:0;
-  transition:background .1s;border-left:3px solid transparent;}
-.model-opt:hover{background:var(--panel3);}
-.model-opt.selected{background:var(--accent-s);border-left-color:var(--accent);color:var(--accent);}
-.model-placeholder{padding:12px;font-size:.82rem;color:var(--muted);text-align:center;}
-
-.setup-error{background:var(--err);border:1px solid var(--err-b);color:var(--err-t);
-  border-radius:9px;padding:10px 13px;font-size:.83rem;display:none;}
-
-.btn{background:var(--accent);color:#1a1205;border:none;border-radius:9px;
-  padding:12px;font:inherit;font-size:.92rem;font-weight:600;cursor:pointer;
-  transition:filter .12s,opacity .12s;display:flex;align-items:center;justify-content:center;gap:7px;}
-.btn:hover:not(:disabled){filter:brightness(1.08);}
-.btn:disabled{opacity:.5;cursor:not-allowed;}
-.spinner{width:15px;height:15px;border:2px solid rgba(0,0,0,.3);border-top-color:transparent;
-  border-radius:50%;animation:spin .7s linear infinite;display:none;}
-@keyframes spin{to{transform:rotate(360deg)}}
-.btn.loading .spinner{display:block;}
-.btn.loading .lbl{opacity:.7;}
-
-.setup-hint{font-size:.75rem;color:var(--muted);}
-.setup-hint a{color:var(--accent);text-decoration:none;}
-.setup-hint a:hover{text-decoration:underline;}
-.setup-hint code{background:var(--panel3);padding:1px 5px;border-radius:4px;font-size:.85em;}
-
-/* ══ MAIN APP ══════════════════════════════════════════════════════ */
+/* ══ Header ══ */
 header{padding:12px 18px;border-bottom:1px solid var(--border);display:flex;
   align-items:center;gap:9px;background:var(--panel);flex-shrink:0;}
 header .dot{width:8px;height:8px;border-radius:50%;background:var(--accent);
   box-shadow:0 0 9px var(--accent);}
 header .title{font-size:.95rem;font-weight:600;}
 header .badge{font-size:.68rem;color:var(--muted);background:var(--panel2);
-  border:1px solid var(--border);border-radius:20px;padding:2px 8px;margin-left:2px;}
+  border:1px solid var(--border);border-radius:20px;padding:2px 8px;margin-left:2px;
+  max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 header .right{margin-left:auto;display:flex;align-items:center;gap:8px;}
-.sid{font-size:.7rem;color:var(--muted);}
-.gear{color:var(--muted);text-decoration:none;font-size:1rem;padding:4px 5px;
+.gear{color:var(--muted);font-size:1.05rem;padding:5px 7px;
   border-radius:6px;transition:color .12s,background .12s;line-height:1;cursor:pointer;background:none;border:none;}
 .gear:hover{color:var(--text);background:var(--panel2);}
 
-/* Tabs */
+/* ══ Tabs ══ */
 .tabs{display:flex;border-bottom:1px solid var(--border);background:var(--panel);flex-shrink:0;}
 .tab{padding:9px 18px;font-size:.82rem;font-weight:500;color:var(--muted);cursor:pointer;
   border-bottom:2px solid transparent;transition:color .12s;user-select:none;}
@@ -108,11 +43,11 @@ header .right{margin-left:auto;display:flex;align-items:center;gap:8px;}
 .tab-badge{font-size:.62rem;background:var(--panel3);padding:1px 5px;border-radius:8px;
   margin-left:5px;color:var(--muted);}
 
-/* Panels */
+/* ══ Panels ══ */
 .panel{display:none;flex:1;flex-direction:column;overflow:hidden;}
 .panel.active{display:flex;}
 
-/* ── Shared message styles ── */
+/* ── Messages ── */
 .messages{flex:1;overflow-y:auto;padding:18px;display:flex;flex-direction:column;
   gap:12px;max-width:760px;width:100%;margin:0 auto;}
 .msg{display:flex;flex-direction:column;gap:5px;animation:rise .15s ease;}
@@ -124,6 +59,19 @@ header .right{margin-left:auto;display:flex;align-items:center;gap:8px;}
 .msg.user .bubble{background:var(--user);color:#fff;border-bottom-right-radius:3px;}
 .msg.bot .bubble{background:var(--panel2);border:1px solid var(--border);border-bottom-left-radius:3px;}
 .msg.err .bubble{background:var(--err);border:1px solid var(--err-b);color:var(--err-t);}
+
+/* Inline "needs a model" notice — friendly, non-blocking */
+.notice{background:var(--panel2);border:1px solid var(--border);border-radius:var(--r);
+  padding:14px 16px;font-size:.88rem;display:flex;flex-direction:column;gap:10px;
+  align-items:flex-start;animation:rise .15s ease;}
+.notice .nrow{display:flex;gap:9px;align-items:flex-start;}
+.notice .nico{font-size:1.1rem;flex-shrink:0;}
+.notice b{font-weight:600;}
+.notice .nbtn{background:var(--accent);color:#1a1205;border:none;border-radius:8px;
+  padding:8px 14px;font:inherit;font-size:.83rem;font-weight:600;cursor:pointer;
+  transition:filter .12s;}
+.notice .nbtn:hover{filter:brightness(1.08);}
+.notice code{background:var(--panel3);padding:1px 6px;border-radius:4px;font-size:.85em;}
 
 /* Typing */
 .typing{display:inline-flex;gap:4px;padding:5px 2px;}
@@ -143,11 +91,6 @@ header .right{margin-left:auto;display:flex;align-items:center;gap:8px;}
 .chip.tool{background:var(--tool-s);border-color:var(--tool);color:#8fe3cd;}
 .chip.src{background:var(--src-s);border-color:var(--src);color:#c3b1f0;}
 .rg+.rg{margin-top:6px;}
-
-/* Toast */
-.toast{background:var(--panel);border:1px solid var(--green-b);color:var(--green);
-  border-radius:9px;padding:9px 13px;font-size:.83rem;display:flex;gap:7px;
-  align-items:center;animation:rise .18s ease;}
 
 /* ── Footer input ── */
 footer{border-top:1px solid var(--border);background:var(--panel);padding:11px 18px;flex-shrink:0;}
@@ -201,200 +144,271 @@ textarea:focus{outline:none;border-color:var(--accent);}
 .detail-body{padding:15px;font-size:.83rem;line-height:1.6;white-space:pre-wrap;
   word-wrap:break-word;}
 
+/* ══ Settings slide-over ══ */
+.overlay{position:fixed;inset:0;background:rgba(0,0,0,.5);opacity:0;visibility:hidden;
+  transition:opacity .2s,visibility .2s;z-index:40;}
+.overlay.open{opacity:1;visibility:visible;}
+.drawer{position:fixed;top:0;right:0;height:100dvh;width:420px;max-width:92vw;
+  background:var(--panel);border-left:1px solid var(--border);z-index:50;
+  transform:translateX(100%);transition:transform .22s ease;
+  display:flex;flex-direction:column;}
+.drawer.open{transform:translateX(0);}
+.drawer-head{padding:16px 20px;border-bottom:1px solid var(--border);
+  display:flex;align-items:center;justify-content:space-between;flex-shrink:0;}
+.drawer-head h2{font-size:1rem;font-weight:600;}
+.drawer-close{background:none;border:none;color:var(--muted);font-size:1.3rem;
+  cursor:pointer;line-height:1;padding:2px 6px;border-radius:6px;}
+.drawer-close:hover{color:var(--text);background:var(--panel2);}
+.drawer-body{flex:1;overflow-y:auto;padding:20px;display:flex;flex-direction:column;gap:18px;}
+.drawer-foot{padding:14px 20px;border-top:1px solid var(--border);flex-shrink:0;
+  display:flex;gap:8px;}
+
+.field{display:flex;flex-direction:column;gap:6px;}
+.field label{font-size:.73rem;font-weight:500;color:var(--muted);
+  text-transform:uppercase;letter-spacing:.5px;}
+.inp{background:var(--panel2);color:var(--text);border:1px solid var(--border);
+  border-radius:9px;padding:10px 13px;font:inherit;font-size:.9rem;
+  transition:border-color .12s;width:100%;}
+.inp:focus{outline:none;border-color:var(--accent);}
+.inp::placeholder{color:var(--muted);}
+.inp-pw{padding-right:44px;}
+.inp-wrap{position:relative;display:flex;align-items:center;}
+.eye{position:absolute;right:11px;background:none;border:none;cursor:pointer;
+  color:var(--muted);font-size:.9rem;padding:3px;transition:color .12s;}
+.eye:hover{color:var(--text);}
+.field-hint{font-size:.74rem;color:var(--muted);}
+.field-hint a{color:var(--accent);text-decoration:none;}
+.field-hint a:hover{text-decoration:underline;}
+.field-hint code{background:var(--panel3);padding:1px 5px;border-radius:4px;font-size:.85em;}
+
+/* Quick provider presets */
+.presets{display:flex;flex-wrap:wrap;gap:6px;}
+.preset{background:var(--panel2);border:1px solid var(--border);border-radius:20px;
+  padding:5px 12px;font-size:.78rem;color:var(--text);cursor:pointer;
+  transition:border-color .12s,background .12s;}
+.preset:hover{border-color:var(--accent);background:var(--accent-s);}
+
+/* Live model selector */
+.fetch-row{display:flex;gap:8px;align-items:flex-end;}
+.fetch-row .inp{flex:1;}
+.btn-fetch{background:var(--panel3);color:var(--text);border:1px solid var(--border);
+  border-radius:9px;padding:10px 14px;font:inherit;font-size:.85rem;font-weight:500;
+  cursor:pointer;white-space:nowrap;transition:border-color .12s,background .12s;}
+.btn-fetch:hover{border-color:var(--muted);}
+.btn-fetch:disabled{opacity:.4;cursor:not-allowed;}
+.model-list{display:flex;flex-direction:column;gap:3px;max-height:160px;
+  overflow-y:auto;border:1px solid var(--border);border-radius:9px;background:var(--panel2);}
+.model-opt{padding:9px 13px;cursor:pointer;font-size:.86rem;
+  transition:background .1s;border-left:3px solid transparent;}
+.model-opt:hover{background:var(--panel3);}
+.model-opt.selected{background:var(--accent-s);border-left-color:var(--accent);color:var(--accent);}
+.model-placeholder{padding:11px;font-size:.8rem;color:var(--muted);text-align:center;}
+
+.drawer-error{background:var(--err);border:1px solid var(--err-b);color:var(--err-t);
+  border-radius:9px;padding:10px 13px;font-size:.83rem;display:none;}
+
+.btn{background:var(--accent);color:#1a1205;border:none;border-radius:9px;
+  padding:11px;font:inherit;font-size:.9rem;font-weight:600;cursor:pointer;
+  transition:filter .12s,opacity .12s;display:flex;align-items:center;justify-content:center;gap:7px;flex:1;}
+.btn:hover:not(:disabled){filter:brightness(1.08);}
+.btn:disabled{opacity:.5;cursor:not-allowed;}
+.btn-ghost{background:var(--panel2);color:var(--text);border:1px solid var(--border);flex:0 0 auto;padding:11px 16px;}
+.btn-ghost:hover:not(:disabled){background:var(--panel3);filter:none;}
+.spinner{width:15px;height:15px;border:2px solid rgba(0,0,0,.3);border-top-color:transparent;
+  border-radius:50%;animation:spin .7s linear infinite;display:none;}
+@keyframes spin{to{transform:rotate(360deg)}}
+.btn.loading .spinner{display:block;}
+.btn.loading .lbl{opacity:.7;}
+
+.details-sum{cursor:pointer;font-size:.74rem;color:var(--muted);
+  text-transform:uppercase;letter-spacing:.5px;}
+
 @media(max-width:600px){
-  .setup-card{padding:24px 18px;}
   .docs-layout{flex-direction:column;}
   .hits-pane{width:100%;max-height:200px;border-right:none;border-bottom:1px solid var(--border);}
   .messages{padding:12px;}
   footer{padding:9px 12px;}
-  .header .sid{display:none;}
+  header .badge{max-width:130px;}
 }
 </style>
 </head>
 <body>
 
-<!-- ══ SETUP SCREEN ══════════════════════════════════════════════ -->
-<div class="screen" id="screen-setup">
-<div class="setup-card">
-  <div class="setup-logo"><span class="dot"></span><h1>Agent Toolkit</h1></div>
-  <p class="setup-sub">Point the toolkit at any OpenAI-compatible API — OpenAI, Groq, Ollama, LM Studio, Anthropic, NVIDIA NIM — and it fetches the model list live.</p>
-
-  <div id="setup-error" class="setup-error"></div>
-
-  <div class="field">
-    <label>API Base URL</label>
-    <input class="inp" id="api-base" type="text"
-      placeholder="https://api.openai.com/v1"
-      value="https://api.openai.com/v1"/>
-    <div class="setup-hint" id="base-hint"></div>
+<!-- ══ HEADER ══ -->
+<header>
+  <span class="dot"></span>
+  <span class="title">Agent Toolkit</span>
+  <span class="badge" id="provider-badge"></span>
+  <div class="right">
+    <button class="gear" title="Settings" onclick="openDrawer()">⚙</button>
   </div>
+</header>
 
-  <div class="field">
-    <label>API Key <span style="font-weight:400;color:var(--muted)">(leave blank for Ollama / LM Studio)</span></label>
-    <div class="inp-wrap">
-      <input class="inp inp-pw" id="api-key" type="password" placeholder="sk-proj-... or gsk_... or blank"/>
-      <button class="eye" onclick="toggleEye('api-key',this)">👁</button>
-    </div>
+<!-- ══ TABS ══ -->
+<div class="tabs">
+  <div class="tab active" data-tab="chat" onclick="switchTab('chat')">
+    Agent Chat <span class="tab-badge">tools + memory</span>
   </div>
+  <div class="tab" data-tab="docs" onclick="switchTab('docs')">
+    Docs Q&amp;A <span class="tab-badge">search</span>
+  </div>
+</div>
 
-  <div class="field model-area">
-    <label>Model</label>
-    <div class="fetch-row">
-      <input class="inp" id="manual-model" type="text" placeholder="or type a model id manually"/>
-      <button class="btn-fetch" id="fetch-btn" onclick="fetchModels()">Fetch models ↓</button>
-    </div>
-    <div class="model-list" id="model-list">
-      <div class="model-placeholder">Enter a URL above then click "Fetch models"</div>
+<!-- ══ CHAT PANEL ══ -->
+<div class="panel active" id="panel-chat">
+  <div class="messages" id="chat-msgs">
+    <div class="msg bot">
+      <span class="role">agent</span>
+      <div class="bubble">Hi! I'm the Helios Robotics assistant. Ask me about the H1 robot, Fleet pricing, or support. I can also do maths and look up country facts. I'll show which tools I used below each reply.</div>
     </div>
   </div>
+  <footer>
+    <div class="composer">
+      <textarea id="chat-input" rows="1"
+        placeholder="Ask anything — e.g. how long does the H1 battery last?"></textarea>
+      <button class="send" id="chat-send" onclick="sendChat()">Send</button>
+    </div>
+    <div class="hint-bar">
+      Try: <code>How long does the H1 battery last?</code> ·
+      <code>Annual cost of 10 robots on Growth with discount?</code>
+    </div>
+  </footer>
+</div>
 
-  <div class="field">
-    <label>Embeddings model</label>
-    <input class="inp" id="emb-model" type="text"
-      placeholder="text-embedding-3-small"
-      value="text-embedding-3-small"/>
-    <div class="setup-hint" id="emb-hint">
-      Computed by the same API as chat, unless you set a different one below.
+<!-- ══ DOCS PANEL ══ -->
+<div class="panel" id="panel-docs">
+  <div class="docs-bar">
+    <input type="text" id="docs-input"
+      placeholder="Search documents — e.g. 'warranty', 'battery capacity'"/>
+    <button class="send" id="docs-send" onclick="searchDocs()">Search</button>
+  </div>
+  <div class="docs-layout">
+    <div class="hits-pane">
+      <div class="hits-head">Results <span id="hits-count"></span></div>
+      <div id="hits-list"></div>
+    </div>
+    <div class="detail-pane" id="detail-pane">
+      <div class="detail-empty">
+        <span class="ico">🔍</span>
+        <p>Search your documents. Matching passages appear on the left — click one to read it here.</p>
+      </div>
     </div>
   </div>
+</div>
 
-  <details class="field" style="gap:10px;">
-    <summary style="cursor:pointer;font-size:.78rem;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;">
-      Embeddings on a different provider (optional)
-    </summary>
-    <div class="setup-hint" style="margin:8px 0;">
-      Use this when your chat provider has no embeddings endpoint (e.g. Groq).
-      Point embeddings at OpenAI (<code>https://api.openai.com/v1</code>) or a
-      local Ollama (<code>http://localhost:11434/v1</code> with <code>nomic-embed-text</code>).
+<!-- ══ SETTINGS DRAWER ══ -->
+<div class="overlay" id="overlay" onclick="closeDrawer()"></div>
+<aside class="drawer" id="drawer">
+  <div class="drawer-head">
+    <h2>Settings</h2>
+    <button class="drawer-close" onclick="closeDrawer()">×</button>
+  </div>
+  <div class="drawer-body">
+    <div class="field-hint" style="font-size:.82rem;">
+      By default this app talks to a local <b>Ollama</b> model — nothing to configure if Ollama is running.
+      Want to use OpenAI, Groq, or another provider instead? Pick one below.
     </div>
+
+    <div id="drawer-error" class="drawer-error"></div>
+
     <div class="field">
-      <label>Embeddings base URL</label>
-      <input class="inp" id="emb-base" type="text" placeholder="leave blank to reuse chat API"/>
+      <label>Quick presets</label>
+      <div class="presets">
+        <span class="preset" onclick="applyPreset('ollama')">Ollama (local)</span>
+        <span class="preset" onclick="applyPreset('openai')">OpenAI</span>
+        <span class="preset" onclick="applyPreset('groq')">Groq</span>
+        <span class="preset" onclick="applyPreset('lmstudio')">LM Studio</span>
+      </div>
     </div>
+
     <div class="field">
-      <label>Embeddings API key</label>
+      <label>API address</label>
+      <input class="inp" id="api-base" type="text" placeholder="http://localhost:11434/v1"/>
+      <div class="field-hint">Where the model lives. Leave as-is for local Ollama.</div>
+    </div>
+
+    <div class="field">
+      <label>API key <span style="font-weight:400;color:var(--muted)">(blank for local)</span></label>
       <div class="inp-wrap">
-        <input class="inp inp-pw" id="emb-key" type="password" placeholder="leave blank to reuse chat key"/>
-        <button class="eye" onclick="toggleEye('emb-key',this)">👁</button>
+        <input class="inp inp-pw" id="api-key" type="password" placeholder="blank for Ollama / LM Studio"/>
+        <button class="eye" onclick="toggleEye('api-key')">👁</button>
       </div>
     </div>
-  </details>
 
-  <button class="btn" id="save-btn" onclick="saveConfig()">
-    <span class="spinner"></span>
-    <span class="lbl">Save &amp; start →</span>
-  </button>
-
-  <div class="setup-hint">
-    Quick URLs: OpenAI <code>https://api.openai.com/v1</code> ·
-    Groq <code>https://api.groq.com/openai/v1</code> ·
-    Ollama <code>http://localhost:11434/v1</code> ·
-    LM Studio <code>http://localhost:1234/v1</code>
-  </div>
-</div>
-</div>
-
-<!-- ══ MAIN APP ══════════════════════════════════════════════════ -->
-<div class="screen" id="screen-app">
-  <header>
-    <span class="dot"></span>
-    <span class="title">Agent Toolkit</span>
-    <span class="badge" id="provider-badge"></span>
-    <div class="right">
-      <span class="sid" id="sid-label"></span>
-      <button class="gear" title="Settings" onclick="showSetup()">⚙</button>
-    </div>
-  </header>
-
-  <div class="tabs">
-    <div class="tab active" data-tab="chat" onclick="switchTab('chat')">
-      Agent Chat <span class="tab-badge">tools + memory</span>
-    </div>
-    <div class="tab" data-tab="docs" onclick="switchTab('docs')">
-      Docs Q&amp;A <span class="tab-badge">RAG search</span>
-    </div>
-  </div>
-
-  <!-- Chat panel -->
-  <div class="panel active" id="panel-chat">
-    <div class="messages" id="chat-msgs">
-      <div class="msg bot">
-        <span class="role">agent</span>
-        <div class="bubble">Hi! I'm the Helios Robotics assistant. Ask me about the H1 robot, Fleet pricing, or support. I can also do maths and look up country facts. I'll show which tools I used below each reply.</div>
+    <div class="field">
+      <label>Model</label>
+      <div class="fetch-row">
+        <input class="inp" id="manual-model" type="text" placeholder="model name"/>
+        <button class="btn-fetch" id="fetch-btn" onclick="fetchModels()">See available ↓</button>
       </div>
+      <div class="model-list" id="model-list" style="display:none;"></div>
     </div>
-    <footer>
-      <div class="composer">
-        <textarea id="chat-input" rows="1"
-          placeholder="Ask about H1 battery life, Growth plan pricing, capital of Portugal..."></textarea>
-        <button class="send" id="chat-send" onclick="sendChat()">Send</button>
-      </div>
-      <div class="hint-bar">
-        Try: <code>How long does the H1 battery last?</code> ·
-        <code>Annual cost of 10 robots on Growth with discount?</code>
-      </div>
-    </footer>
-  </div>
 
-  <!-- Docs panel -->
-  <div class="panel" id="panel-docs">
-    <div class="docs-bar">
-      <input type="text" id="docs-input"
-        placeholder="Search documents — e.g. 'warranty', 'battery capacity'"/>
-      <button class="send" id="docs-send" onclick="searchDocs()">Search</button>
-    </div>
-    <div class="docs-layout">
-      <div class="hits-pane">
-        <div class="hits-head">
-          Results <span id="hits-count"></span>
+    <details>
+      <summary class="details-sum">Embeddings (advanced)</summary>
+      <div style="display:flex;flex-direction:column;gap:14px;margin-top:12px;">
+        <div class="field-hint">
+          Used for document search. By default this reuses your model's API.
+          If your provider has no embeddings (e.g. Groq), point it at OpenAI or local Ollama with <code>nomic-embed-text</code>.
         </div>
-        <div id="hits-list"></div>
-      </div>
-      <div class="detail-pane" id="detail-pane">
-        <div class="detail-empty">
-          <span class="ico">🔍</span>
-          <p>Search your documents. Matching passages appear on the left — click one to read it here.</p>
+        <div class="field">
+          <label>Embeddings model</label>
+          <input class="inp" id="emb-model" type="text" placeholder="nomic-embed-text"/>
+        </div>
+        <div class="field">
+          <label>Embeddings API address <span style="font-weight:400;color:var(--muted)">(optional)</span></label>
+          <input class="inp" id="emb-base" type="text" placeholder="blank to reuse model API"/>
+        </div>
+        <div class="field">
+          <label>Embeddings API key <span style="font-weight:400;color:var(--muted)">(optional)</span></label>
+          <div class="inp-wrap">
+            <input class="inp inp-pw" id="emb-key" type="password" placeholder="blank to reuse model key"/>
+            <button class="eye" onclick="toggleEye('emb-key')">👁</button>
+          </div>
         </div>
       </div>
-    </div>
+    </details>
   </div>
-</div>
+  <div class="drawer-foot">
+    <button class="btn-ghost" onclick="closeDrawer()">Cancel</button>
+    <button class="btn" id="save-btn" onclick="saveConfig()">
+      <span class="spinner"></span>
+      <span class="lbl">Save</span>
+    </button>
+  </div>
+</aside>
 
 <script>
-// ══ State ════════════════════════════════════════════════════════════════════
+// ══ State ══
 const SESSION_ID = crypto.randomUUID();
 let selectedModel = '';
 let currentHits   = [];
+let noticeShown   = false;
 
-// ══ Boot ═════════════════════════════════════════════════════════════════════
+const PRESETS = {
+  ollama:   { base:'http://localhost:11434/v1', model:'llama3.2',        emb:'nomic-embed-text' },
+  openai:   { base:'https://api.openai.com/v1', model:'gpt-4o-mini',     emb:'text-embedding-3-small' },
+  groq:     { base:'https://api.groq.com/openai/v1', model:'llama-3.3-70b-versatile', emb:'' },
+  lmstudio: { base:'http://localhost:1234/v1',  model:'',                emb:'' },
+};
+
+// ══ Boot — straight into chat ══
 (async () => {
   try {
     const r = await fetch('/api/config');
     const d = await r.json();
-    if (d.configured) {
-      showApp(d.model, d.api_base);
-    } else {
-      showScreen('setup');
-    }
+    setBadge(d.model, d.api_base);
+    // Pre-fill the drawer with current config so editing is easy.
+    prefillDrawer(d);
   } catch {
-    showScreen('setup');
+    setBadge('', '');
   }
 })();
 
-// ══ Screen switching ══════════════════════════════════════════════════════════
-function showScreen(name) {
-  document.querySelectorAll('.screen').forEach(s =>
-    s.classList.toggle('active', s.id === 'screen-' + name));
-}
-function showApp(model, base) {
+function setBadge(model, base) {
   const badge = document.getElementById('provider-badge');
-  if (badge) badge.textContent = [shortBase(base), model].filter(Boolean).join(' · ');
-  const sid = document.getElementById('sid-label');
-  if (sid) sid.textContent = 'session: ' + SESSION_ID.slice(0, 8);
-  showScreen('app');
-  document.getElementById('chat-input').focus();
+  if (badge) badge.textContent = [shortBase(base), model].filter(Boolean).join(' · ') || 'not connected';
 }
-function showSetup() { showScreen('setup'); }
 function shortBase(url) {
   try {
     const h = new URL(url).hostname;
@@ -404,10 +418,16 @@ function shortBase(url) {
     if (h.includes('nvidia'))    return 'NVIDIA';
     if (h === 'localhost' || h === '127.0.0.1') return 'Local';
     return h;
-  } catch { return url; }
+  } catch { return ''; }
+}
+function prefillDrawer(d) {
+  if (!d) return;
+  if (d.api_base) document.getElementById('api-base').value = d.api_base;
+  if (d.model)    document.getElementById('manual-model').value = d.model;
+  if (d.embeddings_model) document.getElementById('emb-model').value = d.embeddings_model;
 }
 
-// ══ Tabs ══════════════════════════════════════════════════════════════════════
+// ══ Tabs ══
 function switchTab(name) {
   document.querySelectorAll('.tab').forEach(t =>
     t.classList.toggle('active', t.dataset.tab === name));
@@ -417,35 +437,54 @@ function switchTab(name) {
   if (name === 'docs') document.getElementById('docs-input').focus();
 }
 
-// ══ Setup: fetch live models ══════════════════════════════════════════════════
-async function fetchModels() {
-  const base = document.getElementById('api-base').value.trim();
-  const key  = document.getElementById('api-key').value.trim();
-  if (!base) { showSetupErr('Enter an API base URL first.'); return; }
-
-  const btn = document.getElementById('fetch-btn');
-  btn.disabled = true; btn.textContent = 'Fetching…';
-  clearSetupErr();
-
-  try {
-    const url = '/api/models?' + new URLSearchParams({ base, key: key || '' });
-    const r   = await fetch(url);
-    const d   = await r.json();
-    if (!r.ok) { showSetupErr(d.error || 'Failed to fetch models.'); return; }
-    renderModelList(d.models || []);
-    // Auto-set embed model hint for known providers
-    updateEmbHint(base);
-  } catch (e) {
-    showSetupErr('Network error: ' + e.message);
-  } finally {
-    btn.disabled = false; btn.textContent = 'Fetch models ↓';
+// ══ Settings drawer ══
+function openDrawer() {
+  document.getElementById('overlay').classList.add('open');
+  document.getElementById('drawer').classList.add('open');
+}
+function closeDrawer() {
+  document.getElementById('overlay').classList.remove('open');
+  document.getElementById('drawer').classList.remove('open');
+  clearDrawerErr();
+}
+function applyPreset(key) {
+  const p = PRESETS[key];
+  if (!p) return;
+  document.getElementById('api-base').value = p.base;
+  document.getElementById('manual-model').value = p.model;
+  document.getElementById('emb-model').value = p.emb;
+  document.getElementById('model-list').style.display = 'none';
+  if (key === 'openai' || key === 'groq') {
+    document.getElementById('api-key').focus();
   }
 }
 
+async function fetchModels() {
+  const base = document.getElementById('api-base').value.trim();
+  const key  = document.getElementById('api-key').value.trim();
+  if (!base) { showDrawerErr('Enter an API address first.'); return; }
+
+  const btn = document.getElementById('fetch-btn');
+  btn.disabled = true; btn.textContent = 'Loading…';
+  clearDrawerErr();
+
+  try {
+    const url = '/api/models?' + new URLSearchParams({ base, key: key || '' });
+    const r = await fetch(url);
+    const d = await r.json();
+    if (!r.ok) { showDrawerErr(d.error || 'Could not load models.'); return; }
+    renderModelList(d.models || []);
+  } catch (e) {
+    showDrawerErr('Could not reach that address: ' + e.message);
+  } finally {
+    btn.disabled = false; btn.textContent = 'See available ↓';
+  }
+}
 function renderModelList(models) {
   const list = document.getElementById('model-list');
+  list.style.display = '';
   if (!models.length) {
-    list.innerHTML = '<div class="model-placeholder">No models returned by this endpoint.</div>';
+    list.innerHTML = '<div class="model-placeholder">No models found at this address.</div>';
     return;
   }
   list.innerHTML = '';
@@ -461,32 +500,8 @@ function renderModelList(models) {
     };
     list.appendChild(d);
   });
-  // Auto-select first
-  const first = list.querySelector('.model-opt');
-  if (first) first.click();
 }
 
-function updateEmbHint(base) {
-  const hint = document.getElementById('emb-hint');
-  const emb  = document.getElementById('emb-model');
-  if (base.includes('localhost') || base.includes('127.0.0.1')) {
-    hint.innerHTML = 'For Ollama use <code>nomic-embed-text</code> (run <code>ollama pull nomic-embed-text</code> first).';
-    emb.placeholder = 'nomic-embed-text';
-  } else if (base.includes('openai.com')) {
-    hint.textContent = 'text-embedding-3-small is cheapest; text-embedding-3-large for best quality.';
-    emb.value = emb.value || 'text-embedding-3-small';
-  } else if (base.includes('groq.com')) {
-    hint.innerHTML = "Groq doesn't offer embeddings. Use a separate OpenAI base for embeddings, or run Ollama locally.";
-  }
-}
-
-// Update hint dynamically as user types the base URL
-document.addEventListener('DOMContentLoaded', () => {});
-window.addEventListener('load', () => {
-  document.getElementById('api-base').addEventListener('input', e => updateEmbHint(e.target.value));
-});
-
-// ══ Setup: save config ════════════════════════════════════════════════════════
 async function saveConfig() {
   const base  = document.getElementById('api-base').value.trim();
   const key   = document.getElementById('api-key').value.trim();
@@ -495,12 +510,12 @@ async function saveConfig() {
   const embBase = document.getElementById('emb-base').value.trim();
   const embKey  = document.getElementById('emb-key').value.trim();
 
-  if (!base)  { showSetupErr('API base URL is required.'); return; }
-  if (!model) { showSetupErr('Select or type a model.'); return; }
+  if (!base)  { showDrawerErr('An API address is required.'); return; }
+  if (!model) { showDrawerErr('Enter a model name (or click "See available").'); return; }
 
   const btn = document.getElementById('save-btn');
   btn.classList.add('loading'); btn.disabled = true;
-  clearSetupErr();
+  clearDrawerErr();
 
   try {
     const r = await fetch('/api/config', {
@@ -516,26 +531,28 @@ async function saveConfig() {
       }),
     });
     const d = await r.json();
-    if (!r.ok) { showSetupErr(d.error || 'Save failed.'); return; }
-    showApp(model, base);
+    if (!r.ok) { showDrawerErr(d.error || 'Save failed.'); return; }
+    setBadge(model, base);
+    closeDrawer();
+    // Clear any "needs a model" notice now that we're connected.
+    removeNotice();
   } catch (e) {
-    showSetupErr('Network error: ' + e.message);
+    showDrawerErr('Could not save: ' + e.message);
   } finally {
     btn.classList.remove('loading'); btn.disabled = false;
   }
 }
-
-function showSetupErr(msg) {
-  const el = document.getElementById('setup-error');
+function showDrawerErr(msg) {
+  const el = document.getElementById('drawer-error');
   el.textContent = msg; el.style.display = 'block';
 }
-function clearSetupErr() {
-  const el = document.getElementById('setup-error');
+function clearDrawerErr() {
+  const el = document.getElementById('drawer-error');
   el.style.display = 'none'; el.textContent = '';
 }
 
-// ══ Utilities ════════════════════════════════════════════════════════════════
-function toggleEye(id, btn) {
+// ══ Utilities ══
+function toggleEye(id) {
   const inp = document.getElementById(id);
   inp.type = inp.type === 'password' ? 'text' : 'password';
 }
@@ -547,7 +564,31 @@ function el(tag, cls, text) {
 }
 function scrollBottom(c) { c.scrollTop = c.scrollHeight; }
 
-// ══ Agent Chat ════════════════════════════════════════════════════════════════
+// ══ "Needs a model" inline notice ══
+function showNotice(rawError) {
+  if (noticeShown) return;
+  noticeShown = true;
+  const wrap = el('div', 'notice');
+  const row  = el('div', 'nrow');
+  row.appendChild(el('span', 'nico', '🔌'));
+  const txt = el('div');
+  txt.innerHTML = "<b>I need a model to talk to.</b><br>" +
+    "By default I look for <code>Ollama</code> running on your machine. " +
+    "Either start Ollama (<code>ollama run llama3.2</code>), or open settings to use OpenAI, Groq, or another provider.";
+  row.appendChild(txt);
+  wrap.appendChild(row);
+  const btn = el('button', 'nbtn', 'Open settings');
+  btn.onclick = openDrawer;
+  wrap.appendChild(btn);
+  chatMsgs.appendChild(wrap);
+  scrollBottom(chatMsgs);
+}
+function removeNotice() {
+  document.querySelectorAll('.notice').forEach(n => n.remove());
+  noticeShown = false;
+}
+
+// ══ Agent Chat ══
 const chatMsgs  = document.getElementById('chat-msgs');
 const chatInput = document.getElementById('chat-input');
 const chatSend  = document.getElementById('chat-send');
@@ -603,6 +644,16 @@ function addReasoning(tools, sources, container) {
   container.appendChild(p); scrollBottom(container);
 }
 
+// Detect the "can't reach the model" class of error so we can show the
+// friendly notice instead of a raw error bubble.
+function isConnectionError(msg) {
+  if (!msg) return false;
+  const m = msg.toLowerCase();
+  return m.includes('connection') || m.includes('connect') || m.includes('refused') ||
+         m.includes('reach') || m.includes('timed out') || m.includes('timeout') ||
+         m.includes('11434') || m.includes('dns') || m.includes('tcp');
+}
+
 async function sendChat() {
   const text = chatInput.value.trim();
   if (!text) return;
@@ -617,18 +668,23 @@ async function sendChat() {
     });
     const d = await r.json();
     loading.remove();
-    if (!r.ok) { addMsg('err', d.error || 'Error', chatMsgs); return; }
+    if (!r.ok) {
+      if (isConnectionError(d.error)) { showNotice(d.error); }
+      else { addMsg('err', d.error || 'Something went wrong.', chatMsgs); }
+      return;
+    }
     addMsg('bot', d.answer || '(no reply)', chatMsgs);
     addReasoning(d.tools_used, d.sources, chatMsgs);
   } catch (e) {
     loading.remove();
-    addMsg('err', 'Network error: ' + e.message, chatMsgs);
+    if (isConnectionError(e.message)) { showNotice(e.message); }
+    else { addMsg('err', 'Network error: ' + e.message, chatMsgs); }
   } finally {
     chatSend.disabled = false; chatInput.focus();
   }
 }
 
-// ══ Docs Q&A ══════════════════════════════════════════════════════════════════
+// ══ Docs Q&A ══
 const docsInput  = document.getElementById('docs-input');
 const docsSend   = document.getElementById('docs-send');
 const hitsList   = document.getElementById('hits-list');
@@ -654,7 +710,10 @@ async function searchDocs() {
     });
     const d = await r.json();
     if (!r.ok) {
-      detailPane.innerHTML = '<div class="detail-empty"><span class="ico">⚠</span><p>' + (d.error || 'Error') + '</p></div>';
+      const hint = isConnectionError(d.error)
+        ? "Can't reach the embeddings model. Start Ollama or set a provider in settings."
+        : (d.error || 'Error');
+      detailPane.innerHTML = '<div class="detail-empty"><span class="ico">⚠</span><p>' + hint + '</p></div>';
       return;
     }
     renderHits(d.results || []);
@@ -664,7 +723,6 @@ async function searchDocs() {
     docsSend.disabled = false;
   }
 }
-
 function renderHits(hits) {
   currentHits = hits;
   hitsList.innerHTML = '';
@@ -685,7 +743,6 @@ function renderHits(hits) {
   });
   selectHit(0);
 }
-
 function selectHit(i) {
   document.querySelectorAll('.hit').forEach((r, j) => r.classList.toggle('sel', j === i));
   const h = currentHits[i];
@@ -698,6 +755,9 @@ function selectHit(i) {
   card.appendChild(el('div', 'detail-body', h.text));
   detailPane.appendChild(card);
 }
+
+// Focus chat on load
+document.getElementById('chat-input').focus();
 </script>
 </body>
 </html>

@@ -73,6 +73,22 @@ impl Config {
             &self.embeddings_key
         }
     }
+
+    /// A working out-of-the-box default pointing at a local Ollama instance.
+    /// Used when no config.toml exists, so the app boots straight into a
+    /// usable chat UI. If Ollama is running with these models pulled, it just
+    /// works; if not, the chat surfaces a clear, single-line message.
+    pub fn default_local() -> Self {
+        Self {
+            api_base:         "http://localhost:11434/v1".into(),
+            api_key:          String::new(),
+            model:            "llama3.2".into(),
+            embeddings_base:  String::new(),                 // reuse api_base
+            embeddings_model: "nomic-embed-text".into(),
+            embeddings_key:   String::new(),
+            data_dir:         default_data_dir(),
+        }
+    }
 }
 
 impl Default for Config {

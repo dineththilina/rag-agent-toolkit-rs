@@ -53,19 +53,22 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    // Load saved config if it exists.
+    // Load saved config, or fall back to a sensible default that points at a
+    // local Ollama. This means the app boots straight into a working chat UI:
+    // if Ollama is running, the user can chat with zero setup. If it isn't,
+    // the chat UI still loads and a single inline message guides them.
     let initial_cfg = match config::load() {
         Ok(Some(cfg)) => {
             info!("Loaded config: api_base={} model={}", cfg.api_base, cfg.model);
-            Some(cfg)
+            cfg
         }
         Ok(None) => {
-            info!("No config.toml found — serving setup screen");
-            None
+            info!("No config.toml — defaulting to local Ollama (llama3.2)");
+            config::Config::default_local()
         }
         Err(e) => {
-            warn!("Could not load config.toml: {e} — serving setup screen");
-            None
+            warn!("Could not load config.toml: {e} — defaulting to local Ollama");
+            config::Config::default_local()
         }
     };
 
@@ -77,20 +80,22 @@ async fn main() -> anyhow::Result<()> {
     let store = rag::new_shared_store();
 
     let state = AppState {
-        cfg:      config::new_shared(initial_cfg.clone()),
+        cfg:      config::new_shared(Some(initial_cfg.clone())),
         client:   http_client.clone(),
         sessions: agent::new_session_store(),
         store:    store.clone(),
     };
 
-    // If we already have a config, build the embedded index in the background
-    // so the first chat/RAG request is fast. Reuses vectors.json if valid.
-    if let Some(cfg) = initial_cfg {
+    // Build the embedded index in the background so the first chat/RAG request
+    // is fast. Reuses vectors.json if valid. Failures here are non-fatal — they
+    // just mean the first RAG query waits, or surfaces a clear error.
+    {
         let client = http_client.clone();
         let store  = store.clone();
+        let cfg    = initial_cfg;
         tokio::spawn(async move {
             if let Err(e) = rag::build_index(&client, &cfg, &store).await {
-                warn!("Background index build failed: {e}");
+                warn!("Background index build failed (will retry on demand): {e}");
             }
         });
     }
