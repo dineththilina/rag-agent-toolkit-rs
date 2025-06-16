@@ -144,6 +144,16 @@ textarea:focus{outline:none;border-color:var(--accent);}
 .detail-body{padding:15px;font-size:.83rem;line-height:1.6;white-space:pre-wrap;
   word-wrap:break-word;}
 
+/* Sources list (uploaded + sample docs) */
+.source-item{padding:9px 14px;border-bottom:1px solid var(--border);font-size:.78rem;
+  display:flex;align-items:center;justify-content:space-between;gap:8px;}
+.source-item .sname{color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  display:flex;align-items:center;gap:6px;}
+.source-item .schunks{color:var(--muted);font-size:.68rem;flex-shrink:0;}
+.source-empty{padding:11px 14px;font-size:.76rem;color:var(--muted);}
+.upbadge{font-size:.6rem;background:var(--green-s);color:var(--green);border:1px solid var(--green-b);
+  border-radius:10px;padding:1px 6px;flex-shrink:0;}
+
 /* ══ Settings slide-over ══ */
 .overlay{position:fixed;inset:0;background:rgba(0,0,0,.5);opacity:0;visibility:hidden;
   transition:opacity .2s,visibility .2s;z-index:40;}
@@ -279,18 +289,24 @@ textarea:focus{outline:none;border-color:var(--accent);}
 <div class="panel" id="panel-docs">
   <div class="docs-bar">
     <input type="text" id="docs-input"
-      placeholder="Search documents — e.g. 'warranty', 'battery capacity'"/>
+      placeholder="Search your documents — e.g. 'warranty', 'battery'"/>
     <button class="send" id="docs-send" onclick="searchDocs()">Search</button>
+    <button class="send" id="upload-btn" onclick="document.getElementById('file-input').click()"
+      style="background:var(--panel3);color:var(--text);border:1px solid var(--border);">+ Add PDF</button>
+    <input type="file" id="file-input" accept=".pdf,.txt,.md" multiple style="display:none;"
+      onchange="uploadFiles(this.files)"/>
   </div>
   <div class="docs-layout">
     <div class="hits-pane">
       <div class="hits-head">Results <span id="hits-count"></span></div>
       <div id="hits-list"></div>
+      <div class="hits-head" style="border-top:1px solid var(--border);">Your documents</div>
+      <div id="sources-list"></div>
     </div>
     <div class="detail-pane" id="detail-pane">
       <div class="detail-empty">
-        <span class="ico">🔍</span>
-        <p>Search your documents. Matching passages appear on the left — click one to read it here.</p>
+        <span class="ico">📄</span>
+        <p>Add your own PDFs with <b>+ Add PDF</b>, then search across them here. Sample documents are already loaded so you can try it right away.</p>
       </div>
     </div>
   </div>
@@ -305,8 +321,9 @@ textarea:focus{outline:none;border-color:var(--accent);}
   </div>
   <div class="drawer-body">
     <div class="field-hint" style="font-size:.82rem;">
-      By default this app talks to a local <b>Ollama</b> model — nothing to configure if Ollama is running.
-      Want to use OpenAI, Groq, or another provider instead? Pick one below.
+      This app uses <b>Groq</b> by default — a free AI service. Paste your free key below
+      (get one at <a href="https://console.groq.com/keys" target="_blank">console.groq.com/keys</a>).
+      Prefer a different provider? Pick one of the presets.
     </div>
 
     <div id="drawer-error" class="drawer-error"></div>
@@ -314,9 +331,9 @@ textarea:focus{outline:none;border-color:var(--accent);}
     <div class="field">
       <label>Quick presets</label>
       <div class="presets">
-        <span class="preset" onclick="applyPreset('ollama')">Ollama (local)</span>
+        <span class="preset" onclick="applyPreset('groq')">Groq (free)</span>
         <span class="preset" onclick="applyPreset('openai')">OpenAI</span>
-        <span class="preset" onclick="applyPreset('groq')">Groq</span>
+        <span class="preset" onclick="applyPreset('ollama')">Ollama (local)</span>
         <span class="preset" onclick="applyPreset('lmstudio')">LM Studio</span>
       </div>
     </div>
@@ -386,10 +403,10 @@ let currentHits   = [];
 let noticeShown   = false;
 
 const PRESETS = {
-  ollama:   { base:'http://localhost:11434/v1', model:'llama3.2',        emb:'nomic-embed-text' },
+  groq:     { base:'https://api.groq.com/openai/v1', model:'llama-3.3-70b-versatile', emb:'local' },
   openai:   { base:'https://api.openai.com/v1', model:'gpt-4o-mini',     emb:'text-embedding-3-small' },
-  groq:     { base:'https://api.groq.com/openai/v1', model:'llama-3.3-70b-versatile', emb:'' },
-  lmstudio: { base:'http://localhost:1234/v1',  model:'',                emb:'' },
+  ollama:   { base:'http://localhost:11434/v1', model:'llama3.2',        emb:'nomic-embed-text' },
+  lmstudio: { base:'http://localhost:1234/v1',  model:'',                emb:'local' },
 };
 
 // ══ Boot — straight into chat ══
@@ -398,11 +415,17 @@ const PRESETS = {
     const r = await fetch('/api/config');
     const d = await r.json();
     setBadge(d.model, d.api_base);
-    // Pre-fill the drawer with current config so editing is easy.
     prefillDrawer(d);
+    // If the default (Groq) has no key yet, greet the user with a friendly
+    // one-time prompt to paste their free key — chat won't work without it.
+    const isLocal = (d.api_base || '').includes('localhost') || (d.api_base || '').includes('127.0.0.1');
+    if (!d.api_key_set && !isLocal) {
+      showKeyPrompt();
+    }
   } catch {
     setBadge('', '');
   }
+  loadSources();
 })();
 
 function setBadge(model, base) {
@@ -564,20 +587,36 @@ function el(tag, cls, text) {
 }
 function scrollBottom(c) { c.scrollTop = c.scrollHeight; }
 
-// ══ "Needs a model" inline notice ══
-function showNotice(rawError) {
+// ══ Inline notices ══
+function showKeyPrompt() {
+  if (noticeShown) return;
+  noticeShown = true;
+  const wrap = el('div', 'notice');
+  const row  = el('div', 'nrow');
+  row.appendChild(el('span', 'nico', '👋'));
+  const txt = el('div');
+  txt.innerHTML = "<b>One quick step to start chatting.</b><br>" +
+    "This app uses <b>Groq</b>, a free AI service. Get a free key (under a minute, no card) at " +
+    "<a href='https://console.groq.com/keys' target='_blank' style='color:var(--accent)'>console.groq.com/keys</a>, " +
+    "then paste it in Settings. Document search already works without it.";
+  row.appendChild(txt);
+  wrap.appendChild(row);
+  const btn = el('button', 'nbtn', 'Paste my free key');
+  btn.onclick = openDrawer;
+  wrap.appendChild(btn);
+  chatMsgs.appendChild(wrap);
+  scrollBottom(chatMsgs);
+}
+function showNotice(html, btnLabel) {
   if (noticeShown) return;
   noticeShown = true;
   const wrap = el('div', 'notice');
   const row  = el('div', 'nrow');
   row.appendChild(el('span', 'nico', '🔌'));
-  const txt = el('div');
-  txt.innerHTML = "<b>I need a model to talk to.</b><br>" +
-    "By default I look for <code>Ollama</code> running on your machine. " +
-    "Either start Ollama (<code>ollama run llama3.2</code>), or open settings to use OpenAI, Groq, or another provider.";
+  const txt = el('div'); txt.innerHTML = html;
   row.appendChild(txt);
   wrap.appendChild(row);
-  const btn = el('button', 'nbtn', 'Open settings');
+  const btn = el('button', 'nbtn', btnLabel || 'Open settings');
   btn.onclick = openDrawer;
   wrap.appendChild(btn);
   chatMsgs.appendChild(wrap);
@@ -586,6 +625,31 @@ function showNotice(rawError) {
 function removeNotice() {
   document.querySelectorAll('.notice').forEach(n => n.remove());
   noticeShown = false;
+}
+
+// Map a backend error string to a friendly chat message. Returns true if it
+// showed a notice (so the caller skips the raw error bubble).
+function handleFriendlyError(msg) {
+  if (!msg) return false;
+  if (msg.startsWith('NO_KEY:') || msg.startsWith('BAD_KEY:')) {
+    removeNotice();
+    showNotice(
+      "<b>" + msg.replace(/^[A-Z_]+:\s*/, '') + "</b>",
+      'Open settings'
+    );
+    return true;
+  }
+  if (msg.startsWith('BAD_MODEL:')) {
+    removeNotice();
+    showNotice("<b>" + msg.replace(/^[A-Z_]+:\s*/, '') + "</b>", 'Open settings');
+    return true;
+  }
+  if (msg.startsWith('CONN:')) {
+    removeNotice();
+    showNotice("<b>" + msg.replace(/^[A-Z_]+:\s*/, '') + "</b>", 'Open settings');
+    return true;
+  }
+  return false;
 }
 
 // ══ Agent Chat ══
@@ -644,16 +708,6 @@ function addReasoning(tools, sources, container) {
   container.appendChild(p); scrollBottom(container);
 }
 
-// Detect the "can't reach the model" class of error so we can show the
-// friendly notice instead of a raw error bubble.
-function isConnectionError(msg) {
-  if (!msg) return false;
-  const m = msg.toLowerCase();
-  return m.includes('connection') || m.includes('connect') || m.includes('refused') ||
-         m.includes('reach') || m.includes('timed out') || m.includes('timeout') ||
-         m.includes('11434') || m.includes('dns') || m.includes('tcp');
-}
-
 async function sendChat() {
   const text = chatInput.value.trim();
   if (!text) return;
@@ -669,16 +723,16 @@ async function sendChat() {
     const d = await r.json();
     loading.remove();
     if (!r.ok) {
-      if (isConnectionError(d.error)) { showNotice(d.error); }
-      else { addMsg('err', d.error || 'Something went wrong.', chatMsgs); }
+      if (!handleFriendlyError(d.error)) {
+        addMsg('err', d.error || 'Something went wrong.', chatMsgs);
+      }
       return;
     }
     addMsg('bot', d.answer || '(no reply)', chatMsgs);
     addReasoning(d.tools_used, d.sources, chatMsgs);
   } catch (e) {
     loading.remove();
-    if (isConnectionError(e.message)) { showNotice(e.message); }
-    else { addMsg('err', 'Network error: ' + e.message, chatMsgs); }
+    addMsg('err', 'Network error: ' + e.message, chatMsgs);
   } finally {
     chatSend.disabled = false; chatInput.focus();
   }
@@ -710,10 +764,7 @@ async function searchDocs() {
     });
     const d = await r.json();
     if (!r.ok) {
-      const hint = isConnectionError(d.error)
-        ? "Can't reach the embeddings model. Start Ollama or set a provider in settings."
-        : (d.error || 'Error');
-      detailPane.innerHTML = '<div class="detail-empty"><span class="ico">⚠</span><p>' + hint + '</p></div>';
+      detailPane.innerHTML = '<div class="detail-empty"><span class="ico">⚠</span><p>' + (d.error || 'Search error') + '</p></div>';
       return;
     }
     renderHits(d.results || []);
@@ -754,6 +805,67 @@ function selectHit(i) {
   card.appendChild(head);
   card.appendChild(el('div', 'detail-body', h.text));
   detailPane.appendChild(card);
+}
+
+// ══ Document upload + listing ══
+async function uploadFiles(files) {
+  if (!files || !files.length) return;
+  const btn = document.getElementById('upload-btn');
+  const orig = btn.textContent;
+  btn.disabled = true; btn.textContent = 'Adding…';
+
+  // Show progress in the detail pane.
+  detailPane.innerHTML = '<div class="detail-empty"><span class="ico">⏳</span><p>Reading and indexing ' +
+    files.length + ' file' + (files.length > 1 ? 's' : '') + '… large PDFs take a few seconds.</p></div>';
+
+  const form = new FormData();
+  for (const f of files) form.append('file', f);
+
+  try {
+    const r = await fetch('/api/upload', { method: 'POST', body: form });
+    const d = await r.json();
+    if (!r.ok) {
+      detailPane.innerHTML = '<div class="detail-empty"><span class="ico">⚠</span><p>' + (d.error || 'Upload failed') + '</p></div>';
+      return;
+    }
+    const names = (d.files || []).map(f => f.name).join(', ');
+    detailPane.innerHTML = '<div class="detail-empty"><span class="ico">✅</span><p>Added <b>' +
+      names + '</b> (' + (d.total_chunks || 0) + ' searchable sections). Search for something above to try it.</p></div>';
+    loadSources();
+  } catch (e) {
+    detailPane.innerHTML = '<div class="detail-empty"><span class="ico">⚠</span><p>Upload failed: ' + e.message + '</p></div>';
+  } finally {
+    btn.disabled = false; btn.textContent = orig;
+    document.getElementById('file-input').value = '';
+  }
+}
+
+async function loadSources() {
+  try {
+    const r = await fetch('/api/sources');
+    const d = await r.json();
+    const list = document.getElementById('sources-list');
+    if (!list) return;
+    const items = d.sources || [];
+    if (!items.length) {
+      list.innerHTML = '<div class="source-empty">No documents yet. Click "+ Add PDF".</div>';
+      return;
+    }
+    list.innerHTML = '';
+    const SAMPLES = ['company_overview.md','pricing.md','product_specs.txt','support_faq.txt'];
+    items.forEach(s => {
+      const row = el('div', 'source-item');
+      const name = el('div', 'sname');
+      name.appendChild(el('span', null, '📄'));
+      name.appendChild(el('span', null, s.name));
+      if (!SAMPLES.includes(s.name)) {
+        name.appendChild(el('span', 'upbadge', 'yours'));
+      }
+      row.appendChild(name);
+      row.appendChild(el('span', 'schunks', s.chunks + ' parts'));
+      list.appendChild(row);
+    });
+  } catch { /* non-fatal */ }
 }
 
 // Focus chat on load

@@ -63,11 +63,11 @@ async fn main() -> anyhow::Result<()> {
             cfg
         }
         Ok(None) => {
-            info!("No config.toml — defaulting to local Ollama (llama3.2)");
+            info!("No config.toml — defaulting to Groq (paste a free key in Settings)");
             config::Config::default_local()
         }
         Err(e) => {
-            warn!("Could not load config.toml: {e} — defaulting to local Ollama");
+            warn!("Could not load config.toml: {e} — defaulting to Groq");
             config::Config::default_local()
         }
     };
@@ -112,6 +112,9 @@ async fn main() -> anyhow::Result<()> {
         // Chat + RAG
         .route("/api/chat",      post(post_chat))
         .route("/api/rag",       post(post_rag))
+        // Document upload + listing
+        .route("/api/upload",    post(crate::api::upload::post_upload))
+        .route("/api/sources",   get(crate::api::upload::get_sources))
         .layer(cors)
         .layer(TraceLayer::new_for_http())
         .with_state(state);

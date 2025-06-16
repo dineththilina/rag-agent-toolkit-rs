@@ -66,21 +66,16 @@ change.
    ```bash
    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
    ```
-2. **A model to talk to.** The app defaults to a local **Ollama**, which is the
-   zero-key, fully-local option:
-   ```bash
-   # install Ollama from https://ollama.com, then:
-   ollama pull llama3.2
-   ollama pull nomic-embed-text
-   ```
-   Prefer a hosted provider instead? You don't need Ollama at all — just open
-   Settings in the app and point it at any OpenAI-compatible API:
-   - OpenAI, base `https://api.openai.com/v1`
-   - Groq (free), base `https://api.groq.com/openai/v1`
-   - LM Studio (local), base `http://localhost:1234/v1`
-   - OpenRouter, Together, Fireworks, etc.
+2. **A free Groq key** (the default). Get one in under a minute at
+   [console.groq.com/keys](https://console.groq.com/keys) — no credit card. Paste
+   it into Settings on first launch. That's the only thing you need.
 
-No Docker, no database — the vector store is embedded in the binary.
+   Prefer another provider? Settings also has presets for OpenAI, a local Ollama
+   (no key), and LM Studio, or any OpenAI-compatible API address.
+
+Document search needs nothing extra: embeddings use a built-in local method, so
+RAG works with just the free chat key. No Docker, no database, no model
+downloads — the vector store is embedded in the binary.
 
 ---
 
@@ -91,30 +86,27 @@ cargo run --release
 # or: bash run.sh
 ```
 
-Then open **http://localhost:3000**. The app boots **straight into the chat
-interface** — no setup screen.
+Then open **http://localhost:3000**. The app boots **straight into the chat**.
 
-By default it talks to a local **Ollama** model (`llama3.2`), so if you have
-Ollama running with the models pulled, you can chat immediately with zero
-configuration:
+It uses **Groq** (a free hosted AI) by default. On first launch you'll see a
+one-line prompt to paste a free Groq key — get one in under a minute at
+[console.groq.com/keys](https://console.groq.com/keys) (no credit card), paste
+it in Settings, and you're chatting. Document search works even before that,
+because embeddings run with a built-in local method that needs no key.
 
-```bash
-# one-time, in another terminal:
-ollama pull llama3.2
-ollama pull nomic-embed-text
-ollama serve   # if it isn't already running
-```
+### Uploading your own PDFs
 
-If Ollama isn't running, the chat still loads and shows a single friendly line
-telling you to either start Ollama or open **Settings** (the gear icon) to use
-OpenAI, Groq, or another provider. No wall of forms.
+Go to the **Docs Q&A** tab and click **+ Add PDF**. Pick one or more PDF, TXT,
+or MD files. They're read, split, indexed, and immediately searchable — no
+filesystem fiddling. Your uploaded documents are listed in the sidebar and
+persist across restarts. Sample documents are preloaded so you can try search
+right away.
 
 ### Switching providers
 
-Click the gear icon to open Settings. Pick a quick preset (Ollama, OpenAI, Groq,
-LM Studio), or type any OpenAI-compatible API address and key. Click "See
-available" to pull the live model list from that endpoint, choose one, and Save.
-Everything is tucked in a slide-over panel — it never blocks the chat.
+Click the gear icon for Settings. Quick presets cover Groq, OpenAI, Ollama
+(local), and LM Studio, or type any OpenAI-compatible API address and key. The
+panel slides over the chat and never blocks it.
 
 ---
 
@@ -212,6 +204,8 @@ agent-toolkit-rs/
 | GET    | `/api/models`  | Live model list: `?base=<url>&key=<key>`           |
 | POST   | `/api/chat`    | Agent chat: `{message, session_id}`                |
 | POST   | `/api/rag`     | Direct retrieval: `{query}`                        |
+| POST   | `/api/upload`  | Upload PDF/TXT/MD files (multipart) into the index |
+| GET    | `/api/sources` | List indexed documents with chunk counts          |
 
 ---
 

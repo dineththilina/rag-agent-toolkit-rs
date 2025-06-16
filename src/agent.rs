@@ -125,6 +125,16 @@ pub async fn chat(
     let mut sources:    Vec<String>   = Vec::new();
     let     tool_defs                 = tools::tool_definitions();
 
+    // Friendly guard: a hosted provider (anything not on localhost) needs a key.
+    // Catch this before making a doomed request so the user gets clear guidance.
+    let is_local = cfg.api_base.contains("localhost") || cfg.api_base.contains("127.0.0.1");
+    if cfg.api_key.is_empty() && !is_local {
+        anyhow::bail!(
+            "NO_KEY: I need a free key to start. Open Settings (the gear icon) and paste your Groq key — \
+             you can get one free in under a minute at console.groq.com/keys."
+        );
+    }
+
     // Some open models (especially via Ollama) don't support tool-calling.
     // We start with tools enabled and, if the API rejects the tools parameter,
     // fall back to a plain-chat request so the model can still answer.
@@ -142,13 +152,27 @@ pub async fn chat(
         let mut req = client.post(&url).json(&body);
         if !cfg.api_key.is_empty() { req = req.bearer_auth(&cfg.api_key); }
 
-        let resp = req.send().await.context("calling chat completions")?;
+        // A failed *network* call (provider unreachable) lands here. Give a
+        // plain-English message instead of a raw reqwest error.
+        let resp = match req.send().await {
+            Ok(r)  => r,
+            Err(e) => {
+                if is_local {
+                    anyhow::bail!(
+                        "CONN: I couldn't reach the local AI. Open Settings and switch to Groq \
+                         (free), or start your local model. (details: {e})"
+                    );
+                }
+                anyhow::bail!("CONN: I couldn't reach the AI service. Check your internet connection. (details: {e})");
+            }
+        };
+
         if !resp.status().is_success() {
             let status = resp.status();
             let text   = resp.text().await.unwrap_or_default();
-            // If the failure looks like a tools/function-support problem and we
-            // still had tools on, retry once without them.
             let lc = text.to_lowercase();
+
+            // Tools unsupported → retry without them.
             if tools_enabled && (
                 lc.contains("tool") || lc.contains("function") ||
                 lc.contains("does not support") || lc.contains("not supported")
@@ -157,7 +181,28 @@ pub async fn chat(
                 tools_enabled = false;
                 continue;
             }
-            anyhow::bail!("chat completions {status}: {text}");
+
+            // Bad/expired key.
+            if status.as_u16() == 401 || status.as_u16() == 403
+                || lc.contains("invalid api key") || lc.contains("incorrect api key")
+                || lc.contains("unauthorized") {
+                anyhow::bail!(
+                    "BAD_KEY: That API key was rejected. Open Settings and paste a valid Groq key \
+                     (free at console.groq.com/keys)."
+                );
+            }
+
+            // Unknown model name.
+            if lc.contains("model") && (lc.contains("not found") || lc.contains("does not exist")
+                || lc.contains("decommissioned")) {
+                anyhow::bail!(
+                    "BAD_MODEL: The selected model isn't available. Open Settings, click \
+                     'See available', and pick one from the list."
+                );
+            }
+
+            anyhow::bail!("The AI service returned an error ({status}). {}",
+                if text.len() > 300 { &text[..300] } else { &text });
         }
 
         #[derive(Deserialize)]
@@ -172,7 +217,7 @@ pub async fn chat(
             tool_calls:            Vec<ToolCall>,
         }
 
-        let parsed: CompResp = resp.json().await.context("parsing completions response")?;
+        let parsed: CompResp = resp.json().await.context("reading the AI's reply")?;
         let msg = parsed.choices.into_iter().next()
             .context("empty choices")?
             .message;

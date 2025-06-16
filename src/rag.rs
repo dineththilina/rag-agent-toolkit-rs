@@ -82,6 +82,19 @@ fn load_pdf(path: &Path) -> Result<String> {
     Ok(text)
 }
 
+/// Extract text from uploaded file bytes based on the filename's extension.
+/// Supports pdf, txt, and md. Used by the /api/upload endpoint.
+pub fn extract_text(filename: &str, bytes: &[u8]) -> Result<String> {
+    let ext = filename.rsplit('.').next().unwrap_or("").to_lowercase();
+    match ext.as_str() {
+        "pdf" => pdf_extract::extract_text_from_mem(bytes).context("reading PDF text"),
+        "txt" | "md" | "markdown" | "text" => {
+            String::from_utf8(bytes.to_vec()).context("reading text file (not valid UTF-8)")
+        }
+        other => anyhow::bail!("Unsupported file type '.{other}'. Use PDF, TXT, or MD."),
+    }
+}
+
 struct Doc {
     source:  String,
     content: String,
@@ -140,7 +153,64 @@ fn chunk_docs(docs: Vec<Doc>) -> Vec<Chunk> {
     chunks
 }
 
-// ── Embeddings (provider-agnostic, OpenAI-compatible wire format) ────────────
+// ── Embeddings ───────────────────────────────────────────────────────────────
+//
+// Two paths:
+//   * model == "local"  → built-in pure-Rust embedder (no API, no key, no
+//                         download). Hashes character n-grams into a fixed
+//                         vector with TF weighting. Not as strong as a neural
+//                         embedding, but works well for keyword-style search
+//                         over a small document set, and needs nothing.
+//   * otherwise         → OpenAI-compatible /embeddings endpoint.
+//
+// This is what lets the app do document search with only a free Groq chat key
+// (Groq has no embeddings endpoint of its own).
+
+const LOCAL_EMBED_DIM: usize = 512;
+
+/// Deterministic local embedding: character 3-gram hashing with term-frequency
+/// weighting, then L2-normalised. Same text always yields the same vector, and
+/// similar texts yield similar vectors, which is all cosine search needs.
+fn local_embed(text: &str) -> Vec<f32> {
+    let mut v = vec![0.0f32; LOCAL_EMBED_DIM];
+    let lower = text.to_lowercase();
+    let chars: Vec<char> = lower.chars().collect();
+
+    // Character 3-grams capture word fragments and survive minor variations.
+    if chars.len() >= 3 {
+        for w in chars.windows(3) {
+            let mut h: u64 = 1469598103934665603; // FNV offset
+            for &c in w {
+                h ^= c as u64;
+                h = h.wrapping_mul(1099511628211); // FNV prime
+            }
+            let idx = (h as usize) % LOCAL_EMBED_DIM;
+            v[idx] += 1.0;
+        }
+    }
+    // Also hash whole words so exact term matches score strongly.
+    for word in lower.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()) {
+        let mut h: u64 = 1469598103934665603;
+        for b in word.bytes() {
+            h ^= b as u64;
+            h = h.wrapping_mul(1099511628211);
+        }
+        let idx = (h as usize) % LOCAL_EMBED_DIM;
+        v[idx] += 2.0; // weight exact words higher than n-grams
+    }
+
+    // L2 normalise so cosine similarity is well-behaved.
+    let norm: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+    if norm > 0.0 {
+        for x in v.iter_mut() { *x /= norm; }
+    }
+    v
+}
+
+fn is_local_embed(model: &str) -> bool {
+    let m = model.trim().to_lowercase();
+    m == "local" || m.is_empty()
+}
 
 async fn embed_batch(
     client: &Client,
@@ -149,6 +219,11 @@ async fn embed_batch(
     model:  &str,
     texts:  &[String],
 ) -> Result<Vec<Vec<f32>>> {
+    // Built-in local path: no network at all.
+    if is_local_embed(model) {
+        return Ok(texts.iter().map(|t| local_embed(t)).collect());
+    }
+
     let url  = format!("{}/embeddings", base.trim_end_matches('/'));
     let body = json!({ "model": model, "input": texts });
 
@@ -243,9 +318,12 @@ pub async fn build_index(client: &Client, cfg: &Config, store: &SharedStore) -> 
 
     let fp = fingerprint(&cfg.embeddings_model, &chunks);
 
-    // Reuse a persisted index if it matches the current corpus + embed model.
+    // Reuse a persisted index if it matches the current corpus + embed model,
+    // OR if it contains user uploads (a "custom-" fingerprint). We never want a
+    // background rebuild to wipe documents the user added through the UI.
     if let Some(persisted) = load_persisted() {
-        if persisted.fingerprint == fp && !persisted.chunks.is_empty() {
+        let has_uploads = persisted.fingerprint.starts_with("custom-");
+        if (persisted.fingerprint == fp || has_uploads) && !persisted.chunks.is_empty() {
             info!("Reusing persisted index ({} chunks)", persisted.chunks.len());
             *store.write().await = persisted;
             return Ok(());
@@ -286,6 +364,66 @@ pub async fn build_index(client: &Client, cfg: &Config, store: &SharedStore) -> 
 
     info!("Index ready");
     Ok(())
+}
+
+/// Add one uploaded document to the live store: chunk it, embed the chunks,
+/// append them, and re-persist. Returns the number of chunks added. Used by
+/// the /api/upload endpoint so users can add their own PDFs from the UI.
+pub async fn add_file(
+    client: &Client,
+    cfg:    &Config,
+    store:  &SharedStore,
+    source: &str,
+    content: &str,
+) -> Result<usize> {
+    let doc = Doc { source: source.to_string(), content: content.to_string() };
+    let chunks = chunk_docs(vec![doc]);
+    if chunks.is_empty() {
+        anyhow::bail!("No readable text found in '{source}'.");
+    }
+
+    let emb_base  = cfg.effective_embeddings_base();
+    let emb_key   = cfg.effective_embeddings_key();
+    let emb_model = &cfg.embeddings_model;
+    let texts: Vec<String> = chunks.iter().map(|c| c.text.clone()).collect();
+
+    let mut all_vecs: Vec<Vec<f32>> = Vec::with_capacity(texts.len());
+    for batch in texts.chunks(32) {
+        let vecs = embed_batch(client, emb_base, emb_key, emb_model, batch).await?;
+        all_vecs.extend(vecs);
+    }
+
+    let added = chunks.len();
+    {
+        let mut guard = store.write().await;
+        // Remove any existing chunks from a file with the same name (re-upload).
+        guard.chunks.retain(|c| c.source != source);
+        for (c, embedding) in chunks.into_iter().zip(all_vecs.into_iter()) {
+            guard.chunks.push(StoredChunk {
+                text: c.text, source: c.source, hash: c.hash, embedding,
+            });
+        }
+        // Invalidate the fingerprint so a future build_index doesn't clobber
+        // these user uploads with a stale persisted index.
+        guard.fingerprint = format!("custom-{}", guard.chunks.len());
+        let snapshot = guard.clone();
+        if let Err(e) = save_persisted(&snapshot) {
+            warn!("Could not persist after upload: {e}");
+        }
+    }
+
+    info!("Added {added} chunks from uploaded file '{source}'");
+    Ok(added)
+}
+
+/// List the distinct source documents currently in the store, with chunk counts.
+pub async fn list_sources(store: &SharedStore) -> Vec<(String, usize)> {
+    let guard = store.read().await;
+    let mut counts: std::collections::BTreeMap<String, usize> = Default::default();
+    for c in &guard.chunks {
+        *counts.entry(c.source.clone()).or_insert(0) += 1;
+    }
+    counts.into_iter().collect()
 }
 
 // ── Public: retrieve ─────────────────────────────────────────────────────────
