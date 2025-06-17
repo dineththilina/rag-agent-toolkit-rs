@@ -75,25 +75,9 @@ fn load_txt(path: &Path) -> Result<String> {
     Ok(std::fs::read_to_string(path)?)
 }
 
-fn load_pdf(path: &Path) -> Result<String> {
-    let bytes = std::fs::read(path)?;
-    let text  = pdf_extract::extract_text_from_mem(&bytes)
-        .context("extracting PDF text")?;
-    Ok(text)
-}
-
-/// Extract text from uploaded file bytes based on the filename's extension.
-/// Supports pdf, txt, and md. Used by the /api/upload endpoint.
-pub fn extract_text(filename: &str, bytes: &[u8]) -> Result<String> {
-    let ext = filename.rsplit('.').next().unwrap_or("").to_lowercase();
-    match ext.as_str() {
-        "pdf" => pdf_extract::extract_text_from_mem(bytes).context("reading PDF text"),
-        "txt" | "md" | "markdown" | "text" => {
-            String::from_utf8(bytes.to_vec()).context("reading text file (not valid UTF-8)")
-        }
-        other => anyhow::bail!("Unsupported file type '.{other}'. Use PDF, TXT, or MD."),
-    }
-}
+// PDF text extraction happens in the browser (pdf.js) and is sent as plain text
+// to /api/upload, so the backend never parses PDF bytes. The sample documents
+// shipped in data/ are txt/md only.
 
 struct Doc {
     source:  String,
@@ -115,7 +99,6 @@ fn load_all(data_dir: &str) -> Result<Vec<Doc>> {
 
         let content = match ext.as_str() {
             "txt" | "md" => load_txt(&path)?,
-            "pdf"        => load_pdf(&path)?,
             _            => { warn!("skipping unsupported file: {source}"); continue; }
         };
 
@@ -424,6 +407,23 @@ pub async fn list_sources(store: &SharedStore) -> Vec<(String, usize)> {
         *counts.entry(c.source.clone()).or_insert(0) += 1;
     }
     counts.into_iter().collect()
+}
+
+/// Remove all chunks belonging to a named source. Returns true if any were
+/// removed. Re-persists the store afterwards.
+pub async fn remove_source(store: &SharedStore, name: &str) -> bool {
+    let mut guard = store.write().await;
+    let before = guard.chunks.len();
+    guard.chunks.retain(|c| c.source != name);
+    let removed = guard.chunks.len() != before;
+    if removed {
+        guard.fingerprint = format!("custom-{}", guard.chunks.len());
+        let snapshot = guard.clone();
+        if let Err(e) = save_persisted(&snapshot) {
+            warn!("Could not persist after removal: {e}");
+        }
+    }
+    removed
 }
 
 // ── Public: retrieve ─────────────────────────────────────────────────────────

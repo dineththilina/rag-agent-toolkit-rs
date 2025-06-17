@@ -96,10 +96,13 @@ because embeddings run with a built-in local method that needs no key.
 
 ### Uploading your own PDFs
 
-Go to the **Docs Q&A** tab and click **+ Add PDF**. Pick one or more PDF, TXT,
-or MD files. They're read, split, indexed, and immediately searchable — no
-filesystem fiddling. Your uploaded documents are listed in the sidebar and
-persist across restarts. Sample documents are preloaded so you can try search
+Click **Add** in the Documents panel (left side). Pick one or more PDF, TXT, or
+MD files. PDFs are read in your browser with Mozilla's pdf.js — the same engine
+Firefox uses — which handles real-world PDFs far more reliably than server-side
+parsers, and means your files never leave your machine as raw bytes (only the
+extracted text is sent to be indexed). Documents appear in the panel immediately
+and persist across restarts. Scanned/image-only PDFs are detected and reported
+clearly (they'd need OCR first). Sample documents are preloaded so search works
 right away.
 
 ### Switching providers

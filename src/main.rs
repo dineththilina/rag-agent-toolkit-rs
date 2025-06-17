@@ -115,6 +115,7 @@ async fn main() -> anyhow::Result<()> {
         // Document upload + listing
         .route("/api/upload",    post(crate::api::upload::post_upload))
         .route("/api/sources",   get(crate::api::upload::get_sources))
+        .route("/api/remove",    post(crate::api::upload::post_remove))
         .layer(cors)
         .layer(TraceLayer::new_for_http())
         .with_state(state);

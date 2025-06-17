@@ -9,7 +9,7 @@ path = "src/main.rs"
 
 [dependencies]
 # Web server
-axum            = { version = "0.7", features = ["macros", "multipart"] }
+axum            = { version = "0.7", features = ["macros"] }
 axum-extra      = { version = "0.9", features = ["typed-header"] }
 tower           = "0.4"
 tower-http      = { version = "0.5", features = ["fs", "cors", "trace"] }
@@ -34,8 +34,8 @@ toml            = "0.8"
 # Text chunking (pure Rust, no ML weights)
 text-splitter   = { version = "0.17", features = ["markdown"] }
 
-# PDF text extraction
-pdf-extract     = "0.7"
+# PDF text extraction happens in the browser (pdf.js), not in Rust, so no
+# PDF crate is needed here.
 
 # Error handling
 anyhow          = "1"
