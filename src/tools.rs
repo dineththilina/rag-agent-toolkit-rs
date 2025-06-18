@@ -24,7 +24,7 @@ pub fn tool_definitions() -> Value {
             "type": "function",
             "function": {
                 "name": "search_knowledge_base",
-                "description": "Search the Helios Robotics internal knowledge base for facts about the company, the H1 robot specifications, Helios Fleet pricing and plans, and support FAQs. Use this for ANY question about Helios, its products, pricing, specs, or support.",
+                "description": "Search across ALL of the user's uploaded documents and return the most relevant passages with their source filenames. Use this for ANY question that could be answered by the user's documents — facts, details, summaries, specifications, policies, or anything else. You do not need to know which documents exist; this searches everything. Call this whenever a question might relate to the user's content.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -41,7 +41,7 @@ pub fn tool_definitions() -> Value {
             "type": "function",
             "function": {
                 "name": "calculator",
-                "description": "Evaluate a basic arithmetic expression. Supports + - * / ** % and parentheses. Use this for totals, discounts, or unit conversions.",
+                "description": "Evaluate a basic arithmetic expression. Supports + - * / ** % and parentheses. Use this for any totals, discounts, multiplications, or unit conversions.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -58,7 +58,7 @@ pub fn tool_definitions() -> Value {
             "type": "function",
             "function": {
                 "name": "country_facts",
-                "description": "Look up live facts about a country (capital, population, region, currency) using the public REST Countries API. Use this for general geography questions NOT about Helios.",
+                "description": "Look up live facts about a country (capital, population, region, currency) using the public REST Countries API. Use this for general geography questions about a specific country.",
                 "parameters": {
                     "type": "object",
                     "properties": {

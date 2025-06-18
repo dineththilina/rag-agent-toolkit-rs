@@ -76,14 +76,17 @@ pub fn new_session_store() -> SessionStore {
 
 // ── System prompt ─────────────────────────────────────────────────────────────
 
-const SYSTEM: &str = "You are the Helios Robotics assistant. You have three tools:\
-\n- search_knowledge_base: for anything about Helios, the H1 robot, pricing, or support. \
-Always use this for company questions.\
-\n- calculator: for arithmetic — totals, discounts, conversions.\
-\n- country_facts: for general geography questions unrelated to Helios.\
-\n\nDecide which tool each question needs. You may chain tools. \
-Cite source document names when you use the knowledge base. \
-If the knowledge base has no answer, say so — do not invent facts.";
+const SYSTEM: &str = "You are a helpful research assistant with access to the user's uploaded documents through tools. \
+Follow these rules strictly:\
+\n\n1. For ANY question that might be answered by the user's documents, you MUST call the search_knowledge_base tool. \
+Do this immediately and silently — never say 'I will search' or 'I need to use my tool'. Just call it.\
+\n2. NEVER invent, assume, or guess document names, file names, or document contents. You do not know what documents exist until you search. \
+The search tool searches everything the user has uploaded; you do not need to know file names to search.\
+\n3. For arithmetic (totals, discounts, conversions), call the calculator tool.\
+\n4. For general geography facts about a country, call the country_facts tool.\
+\n5. After a tool returns results, answer using ONLY what the results contain. If the search returns nothing relevant, say plainly that the documents don't cover it. Do not fill gaps with made-up information.\
+\n6. When you used the knowledge base, mention which source documents the answer came from (use the exact source names returned by the tool).\
+\n\nThe user may ask follow-up questions like 'summarize' or 'tell me more' — interpret these in the context of the conversation and the documents, and search again if needed.";
 
 // ── Main chat function ────────────────────────────────────────────────────────
 
@@ -139,11 +142,27 @@ pub async fn chat(
     // We start with tools enabled and, if the API rejects the tools parameter,
     // fall back to a plain-chat request so the model can still answer.
     let mut tools_enabled = true;
+    // Guard against infinite tool loops.
+    let mut iterations = 0;
+    // Track whether we've already nudged a model that narrated a tool call
+    // instead of emitting one (a known quirk of some hosted models).
+    let mut nudged = false;
 
     // Agentic loop: keep calling the model until it gives a plain text reply.
     let answer = loop {
+        iterations += 1;
+        if iterations > 6 {
+            // Safety valve: don't loop forever. Return whatever we have.
+            break "I wasn't able to complete that with the tools available. Please try rephrasing.".to_string();
+        }
+
         let body = if tools_enabled {
-            json!({ "model": cfg.model, "messages": history, "tools": tool_defs })
+            json!({
+                "model": cfg.model,
+                "messages": history,
+                "tools": tool_defs,
+                "tool_choice": "auto"
+            })
         } else {
             json!({ "model": cfg.model, "messages": history })
         };
@@ -223,8 +242,37 @@ pub async fn chat(
             .message;
 
         if msg.tool_calls.is_empty() {
-            // Plain text answer — we're done.
-            // Append the assistant message to history before saving.
+            let text = msg.content.clone().unwrap_or_default();
+
+            // Safety net for the known failure where a model *says* it will use
+            // a tool but doesn't emit a tool call. If the reply reads like a
+            // promise to search and we haven't nudged yet, push it once to
+            // actually call the tool instead of accepting the narration.
+            let lc = text.to_lowercase();
+            let looks_like_narration = tools_enabled && !nudged && (
+                (lc.contains("search") || lc.contains("look up") || lc.contains("knowledge base")
+                 || lc.contains("my tool") || lc.contains("use the") || lc.contains("i'll use")
+                 || lc.contains("i will use") || lc.contains("i need to"))
+                && (lc.contains("tool") || lc.contains("search") || lc.contains("find"))
+            );
+
+            if looks_like_narration {
+                nudged = true;
+                // Add the model's narration to history, then a firm instruction.
+                history.push(Message {
+                    role: "assistant".into(),
+                    content: msg.content.clone(),
+                    tool_calls: None, tool_call_id: None, name: None,
+                });
+                history.push(Message {
+                    role: "user".into(),
+                    content: Some("Call the search_knowledge_base tool now with an appropriate query. Do not describe what you will do — just make the tool call.".into()),
+                    tool_calls: None, tool_call_id: None, name: None,
+                });
+                continue;
+            }
+
+            // Genuine plain-text answer — we're done.
             history.push(Message {
                 role:         "assistant".into(),
                 content:      msg.content.clone(),
@@ -232,7 +280,7 @@ pub async fn chat(
                 tool_call_id: None,
                 name:         None,
             });
-            break msg.content.unwrap_or_default();
+            break text;
         }
 
         // Model wants to call tools. Append the assistant turn (with tool_calls).
