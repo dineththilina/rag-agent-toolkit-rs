@@ -12,3 +12,6 @@ config.toml
 .idea/
 .vscode/
 *.swp
+
+# Search index (rebuilt on launch)
+index.json

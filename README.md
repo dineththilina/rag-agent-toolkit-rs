@@ -15,7 +15,7 @@ endpoint. No hardcoded model names.
 
 - **One binary, zero services.** `cargo build --release` produces a single
   executable with the UI embedded. The vector index lives in-process and
-  persists to a `vectors.json` file. Nothing else to install or run.
+  persists to a `index.json` file. Nothing else to install or run.
 - **Provider-agnostic.** Talks the OpenAI-compatible wire format, so any
   provider that implements it works. Models that don't support tool-calling
   (common with small local models) are detected and fall back to plain chat
@@ -43,20 +43,20 @@ endpoint. No hardcoded model names.
                   ┌─────────────┴───────────────┐
                   │                             │
          ┌────────▼─────────┐          ┌────────▼────────┐
-         │ embedded vectors │          │  data/ (docs)   │
-         │ Vec + cosine     │◄─ embed ─│  txt, md, pdf   │
-         │ → vectors.json   │          └─────────────────┘
-         └──────────────────┘
+         │ embedded index   │          │  data/ (docs)   │
+         │ BM25 keyword rank │◄─ index ─│  txt, md        │
+         │ → index.json     │          │  + your uploads │
+         └──────────────────┘          └─────────────────┘
 
    Agent loop: user msg ─► model ─► (tool_calls?) ─► run tools ─► model ─► answer
    Tools: search_knowledge_base (RAG) · calculator · country_facts (HTTP)
 ```
 
-The vector store is a plain `Vec` of `{text, source, embedding}` scored by
-brute-force cosine similarity. For a demo-scale corpus this is faster than a
-network round-trip to a vector DB and needs no setup. It persists to
-`vectors.json` and rebuilds automatically when the documents or embedding model
-change.
+Document search is BM25 over the chunked text, computed in-process — no
+embeddings, no vector database, no API key for search. It persists to
+`index.json` and rebuilds automatically when the documents change. BM25 gives
+sharp keyword rankings, which is what document Q&A needs; the chat model then
+answers from the retrieved passages.
 
 ---
 
@@ -73,9 +73,10 @@ change.
    Prefer another provider? Settings also has presets for OpenAI, a local Ollama
    (no key), and LM Studio, or any OpenAI-compatible API address.
 
-Document search needs nothing extra: embeddings use a built-in local method, so
-RAG works with just the free chat key. No Docker, no database, no model
-downloads — the vector store is embedded in the binary.
+Document search needs nothing extra: it uses BM25 keyword ranking (the same
+family of algorithm search engines use) computed in-process, so it works with
+no embedding model, no second API key, and nothing to download. No Docker, no
+database — the index is embedded in the binary.
 
 ---
 
@@ -113,19 +114,6 @@ panel slides over the chat and never blocks it.
 
 ---
 
-## Embeddings across providers
-
-Embeddings always use the OpenAI-compatible `/embeddings` endpoint. Most
-providers serve it on the same base URL as chat, so you usually leave the
-embeddings fields blank and they reuse your chat API.
-
-If your chat provider has **no** embeddings endpoint (Groq is the common case),
-open **"Embeddings on a different provider"** in setup and point it at:
-- OpenAI: base `https://api.openai.com/v1`, model `text-embedding-3-small`, your OpenAI key, or
-- A local Ollama: base `http://localhost:11434/v1`, model `nomic-embed-text`, no key.
-
----
-
 ## Using it
 
 **Agent Chat tab** — the full agent: tool-calling, memory, and a panel under each
@@ -133,7 +121,7 @@ reply showing which tools ran and which documents were retrieved.
 
 **Docs Q&A tab** — direct semantic search over your documents. Type a query, get
 ranked passages with relevance scores, click one to read the full excerpt. No
-LLM call, just embeddings + cosine search.
+LLM call, just BM25 keyword search.
 
 Try:
 - `How long does the H1 battery last?` (RAG)
@@ -155,14 +143,15 @@ and a couple of third-party crate APIs may differ slightly from what's written.
 cargo build 2>&1 | head -40
 ```
 
-Most likely spots, in order:
+Most likely spot:
 1. `src/rag.rs` — the `text-splitter` chunking call (`TextSplitter::new` /
-   `.chunks`). If the API differs, it's a one-line fix; check the crate docs.
-2. `src/rag.rs` — `pdf_extract::extract_text_from_mem`. If renamed, check the
-   `pdf-extract` docs for the current function name.
+   `.chunks`). If that crate's API differs in your pinned version, it's a
+   one-line fix; the crate docs show the current signature.
 
-Everything else (axum routes, serde types, the agent loop, the calculator
-parser, the embedded vector store) uses stable, well-established APIs.
+Everything else (axum routes, serde types, the agent loop, the BM25 search, the
+calculator parser) uses stable, well-established APIs. PDF parsing was removed
+from Rust entirely (it happens in the browser now), so that whole class of
+failure is gone.
 
 ---
 
@@ -215,7 +204,7 @@ agent-toolkit-rs/
 ## Notes
 
 - Session memory is in-process (a `DashMap`). Restarting the server clears it.
-- The vector index persists to `vectors.json` and survives restarts. Delete it
+- The search index persists to `index.json` and survives restarts. Delete it
   (or change the documents / embedding model) to force a rebuild.
 - `config.toml` holds your API key in plaintext and is gitignored. Treat it like
   any local secrets file.
