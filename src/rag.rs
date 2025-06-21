@@ -332,3 +332,79 @@ pub async fn retrieve(
     }
     Ok(bm25_search(&guard.chunks, query, k))
 }
+
+// ── Context building (NotebookLM-style: docs live in the model's context) ─────
+
+/// Roughly 4 characters per token. We budget by characters to stay simple and
+/// provider-agnostic. ~360k chars ≈ ~90k tokens, leaving headroom under a
+/// 128k-token context for the conversation and the model's reply.
+const CONTEXT_CHAR_BUDGET: usize = 360_000;
+
+/// Build the document context that gets placed in front of the model on every
+/// turn. If everything fits within the budget, ALL documents are included in
+/// full (so the model genuinely "knows" them — summaries, subject matter, etc.
+/// all work with no search step). If the corpus is larger than the budget, we
+/// fall back to including the chunks most relevant to the current message,
+/// selected by BM25, so large libraries still work.
+///
+/// Returns (context_text, included_sources, truncated).
+pub async fn build_context(store: &SharedStore, message: &str) -> (String, Vec<String>, bool) {
+    let guard = store.read().await;
+    if guard.chunks.is_empty() {
+        return (String::new(), Vec::new(), false);
+    }
+
+    // Group chunks back into whole documents, preserving order.
+    let mut doc_order: Vec<String> = Vec::new();
+    let mut by_source: std::collections::HashMap<String, Vec<&StoredChunk>> = Default::default();
+    for c in &guard.chunks {
+        if !by_source.contains_key(&c.source) {
+            doc_order.push(c.source.clone());
+        }
+        by_source.entry(c.source.clone()).or_default().push(c);
+    }
+
+    let total_chars: usize = guard.chunks.iter().map(|c| c.text.len()).sum();
+
+    if total_chars <= CONTEXT_CHAR_BUDGET {
+        // Everything fits — include every document in full.
+        let mut out = String::new();
+        let mut sources = Vec::new();
+        for src in &doc_order {
+            let chunks = &by_source[src];
+            out.push_str(&format!("\n===== DOCUMENT: {src} =====\n"));
+            for c in chunks {
+                out.push_str(&c.text);
+                out.push_str("\n");
+            }
+            sources.push(src.clone());
+        }
+        return (out, sources, false);
+    }
+
+    // Too big for full inclusion: select the most relevant chunks by BM25 until
+    // we fill the budget.
+    let ranked = bm25_search(&guard.chunks, message, 10_000); // score all matching
+    let mut out = String::new();
+    let mut used = 0usize;
+    let mut sources_set: std::collections::BTreeSet<String> = Default::default();
+
+    // If the query had no keyword matches at all, fall back to the first chunks
+    // of each document so the model still has something representative.
+    let selected: Vec<Hit> = if ranked.is_empty() {
+        guard.chunks.iter().take(60).map(|c| Hit {
+            text: c.text.clone(), source: c.source.clone(), score: 0.0,
+        }).collect()
+    } else {
+        ranked
+    };
+
+    out.push_str("\n(Showing the most relevant excerpts from a large document set.)\n");
+    for h in selected {
+        if used + h.text.len() > CONTEXT_CHAR_BUDGET { break; }
+        out.push_str(&format!("\n----- from {} -----\n{}\n", h.source, h.text));
+        used += h.text.len();
+        sources_set.insert(h.source.clone());
+    }
+    (out, sources_set.into_iter().collect(), true)
+}

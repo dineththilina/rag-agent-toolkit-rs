@@ -343,12 +343,12 @@ details[open] .details-sum::before{content:'▾ ';}
       <div class="chat-inner" id="chat">
         <div class="welcome" id="welcome">
           <div class="w-mark">✦</div>
-          <h2>Ask about your documents</h2>
-          <p>I'm connected to the documents on the left. Ask me anything about them and I'll search them, answer, and show you which sources I used. I can also do calculations and look up country facts.</p>
+          <h2>Chat with your documents</h2>
+          <p>Everything in the Documents panel is loaded into our conversation. Ask me to summarize, explain, compare, or answer specific questions — I already know what's in them. Add more with the “Add” button anytime.</p>
           <div class="chips">
-            <button class="chip-btn" onclick="quickAsk('Give me a summary of the documents.')">Summarize my documents</button>
-            <button class="chip-btn" onclick="quickAsk('What are the key points?')">Key points</button>
-            <button class="chip-btn" onclick="quickAsk('What is the capital of Portugal?')">Capital of Portugal</button>
+            <button class="chip-btn" onclick="quickAsk('Give me a concise summary of my documents.')">Summarize everything</button>
+            <button class="chip-btn" onclick="quickAsk('What are the main topics covered?')">Main topics</button>
+            <button class="chip-btn" onclick="quickAsk('What are the most important details I should know?')">Key details</button>
           </div>
         </div>
       </div>
@@ -596,7 +596,7 @@ function showNotice(html){
 function removeNotice(){document.querySelectorAll('.notice').forEach(n=>n.remove());noticeShown=false;}
 function handleFriendlyError(msg){
   if(!msg)return false;
-  if(msg.startsWith('NO_KEY:')||msg.startsWith('BAD_KEY:')||msg.startsWith('BAD_MODEL:')||msg.startsWith('CONN:')){
+  if(msg.startsWith('NO_KEY:')||msg.startsWith('BAD_KEY:')||msg.startsWith('BAD_MODEL:')||msg.startsWith('CONN:')||msg.startsWith('TOO_BIG:')){
     removeNotice();showNotice('<b>'+msg.replace(/^[A-Z_]+:\s*/,'')+'</b>');return true;
   }
   return false;
@@ -625,12 +625,12 @@ function addLoading(){
   b.appendChild(t);w.appendChild(b);chatEl.appendChild(w);scrollBottom();return w;
 }
 function addReason(tools,sources){
-  if(!tools?.length&&!sources?.length)return;
-  const p=el('div','reason');p.appendChild(el('div','reason-t','How I found this'));
-  if(tools?.length){const g=el('div','rg'),c=el('div','rchips');
-    tools.forEach(t=>{const x=el('span','rchip tool');x.textContent='⚙ '+t.tool;c.appendChild(x);});g.appendChild(c);p.appendChild(g);}
-  if(sources?.length){const g=el('div','rg'),c=el('div','rchips');
-    sources.forEach(s=>{const x=el('span','rchip src');x.textContent='◈ '+s;c.appendChild(x);});g.appendChild(c);p.appendChild(g);}
+  if(!sources?.length)return;
+  const p=el('div','reason');
+  p.appendChild(el('div','reason-t','Based on your documents'));
+  const g=el('div','rg'),c=el('div','rchips');
+  sources.forEach(s=>{const x=el('span','rchip src');x.textContent='◈ '+s;c.appendChild(x);});
+  g.appendChild(c);p.appendChild(g);
   chatEl.appendChild(p);scrollBottom();
 }
 async function sendChat(){
