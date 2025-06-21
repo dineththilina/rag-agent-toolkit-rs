@@ -11,7 +11,6 @@ mod api;
 mod config;
 mod models;
 mod rag;
-mod tools;
 
 use std::net::SocketAddr;
 

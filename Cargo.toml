@@ -10,8 +10,6 @@ path = "src/main.rs"
 [dependencies]
 # Web server
 axum            = { version = "0.7", features = ["macros"] }
-axum-extra      = { version = "0.9", features = ["typed-header"] }
-tower           = "0.4"
 tower-http      = { version = "0.5", features = ["fs", "cors", "trace"] }
 tokio           = { version = "1",   features = ["full"] }
 
@@ -39,7 +37,6 @@ text-splitter   = { version = "0.17", features = ["markdown"] }
 
 # Error handling
 anyhow          = "1"
-thiserror       = "1"
 
 # Logging
 tracing         = "0.1"
@@ -48,7 +45,6 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Misc
 uuid            = { version = "1", features = ["v4"] }
 dashmap         = "6"       # concurrent session memory store
-sha2            = "0.10"    # content-hash for dedup
 
 [profile.release]
 opt-level = 3

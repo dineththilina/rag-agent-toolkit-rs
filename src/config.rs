@@ -56,35 +56,16 @@ fn default_embed_model() -> String { "text-embedding-3-small".into() }
 fn default_data_dir()     -> String { "data".into() }
 
 impl Config {
-    /// Effective embeddings base URL: falls back to api_base if not explicitly set.
-    pub fn effective_embeddings_base(&self) -> &str {
-        if self.embeddings_base.is_empty() {
-            &self.api_base
-        } else {
-            &self.embeddings_base
-        }
-    }
-
-    /// Effective embeddings key: falls back to api_key if not explicitly set.
-    pub fn effective_embeddings_key(&self) -> &str {
-        if self.embeddings_key.is_empty() {
-            &self.api_key
-        } else {
-            &self.embeddings_key
-        }
-    }
-
-    /// The out-of-the-box default. Chat goes through Groq (free, one key) and
-    /// document search uses the built-in local embedder ("local") which needs
-    /// no key or service. This means: paste one free Groq key and everything
-    /// works — chat AND PDF search — with nothing else to install.
+    /// The out-of-the-box default. Chat goes through Groq (free, one key);
+    /// document search is BM25 (in-process, needs no key or service). So pasting
+    /// one free Groq key makes everything work with nothing else to install.
     pub fn default_local() -> Self {
         Self {
             api_base:         "https://api.groq.com/openai/v1".into(),
             api_key:          String::new(),               // user pastes a free Groq key
             model:            "llama-3.3-70b-versatile".into(),
             embeddings_base:  String::new(),
-            embeddings_model: "local".into(),              // built-in, no key needed
+            embeddings_model: "local".into(),              // unused by BM25; kept for config compat
             embeddings_key:   String::new(),
             data_dir:         default_data_dir(),
         }
