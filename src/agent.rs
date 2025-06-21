@@ -159,17 +159,36 @@ pub async fn chat(
     let url = format!("{}/chat/completions", cfg.api_base.trim_end_matches('/'));
     let body = json!({ "model": cfg.model, "messages": messages });
 
-    let mut req = client.post(&url).json(&body);
-    if !cfg.api_key.is_empty() { req = req.bearer_auth(&cfg.api_key); }
+    // Send, with automatic retry on 429 (rate limit). Free tiers cap tokens per
+    // minute; when we hit that, the provider tells us how long to wait, so we
+    // wait and resend instead of surfacing an error to the user.
+    let mut attempt = 0;
+    let resp = loop {
+        attempt += 1;
 
-    let resp = match req.send().await {
-        Ok(r) => r,
-        Err(e) => {
-            if is_local {
-                anyhow::bail!("CONN: I couldn't reach the local AI. Open Settings and switch to Groq (free), or start your local model. (details: {e})");
+        let mut req = client.post(&url).json(&body);
+        if !cfg.api_key.is_empty() { req = req.bearer_auth(&cfg.api_key); }
+
+        let r = match req.send().await {
+            Ok(r) => r,
+            Err(e) => {
+                if is_local {
+                    anyhow::bail!("CONN: I couldn't reach the local AI. Open Settings and switch to Groq (free), or start your local model. (details: {e})");
+                }
+                anyhow::bail!("CONN: I couldn't reach the AI service. Check your internet connection. (details: {e})");
             }
-            anyhow::bail!("CONN: I couldn't reach the AI service. Check your internet connection. (details: {e})");
+        };
+
+        // Rate limited: wait the suggested time (capped) and retry, up to 3 times.
+        if r.status().as_u16() == 429 && attempt <= 3 {
+            let body_text = r.text().await.unwrap_or_default();
+            let wait = parse_retry_secs(&body_text).unwrap_or(3.0).min(10.0);
+            tracing::warn!("Rate limited (attempt {attempt}); waiting {wait:.1}s then retrying");
+            tokio::time::sleep(std::time::Duration::from_secs_f64(wait + 0.3)).await;
+            continue;
         }
+
+        break r;
     };
 
     if !resp.status().is_success() {
@@ -243,4 +262,26 @@ fn user_msg(text: &str) -> Message {
 fn assistant_msg(text: &str) -> Message {
     Message { role: "assistant".into(), content: Some(text.into()),
         tool_calls: None, tool_call_id: None, name: None }
+}
+
+/// Extract the suggested wait time (in seconds) from a rate-limit response body,
+/// e.g. "...Please try again in 2.225s..." or "...in 850ms...". None if absent.
+fn parse_retry_secs(body: &str) -> Option<f64> {
+    let lower = body.to_lowercase();
+    let idx = lower.find("try again in")?;
+    let tail = lower[idx + "try again in".len()..].trim_start();
+
+    // The number.
+    let num: String = tail.chars()
+        .take_while(|c| c.is_ascii_digit() || *c == '.')
+        .collect();
+    let val: f64 = num.parse().ok()?;
+
+    // The unit immediately after the number.
+    let unit = tail[num.len()..].trim_start();
+    if unit.starts_with("ms") {
+        Some(val / 1000.0)
+    } else {
+        Some(val)   // assume seconds
+    }
 }

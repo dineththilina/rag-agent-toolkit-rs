@@ -335,17 +335,43 @@ pub async fn retrieve(
 
 // ── Context building (NotebookLM-style: docs live in the model's context) ─────
 
-/// Roughly 4 characters per token. We budget by characters to stay simple and
-/// provider-agnostic. ~360k chars ≈ ~90k tokens, leaving headroom under a
-/// 128k-token context for the conversation and the model's reply.
-const CONTEXT_CHAR_BUDGET: usize = 360_000;
+/// Roughly 4 characters per token. We budget by characters to stay simple.
+/// ~32k chars ≈ ~8k tokens, which fits comfortably inside Groq's free-tier
+/// limit of 12k tokens/minute (leaving room for the prompt, conversation, and
+/// reply). If you're on a paid tier with a larger limit, this can be raised.
+const CONTEXT_CHAR_BUDGET: usize = 32_000;
 
-/// Build the document context that gets placed in front of the model on every
-/// turn. If everything fits within the budget, ALL documents are included in
-/// full (so the model genuinely "knows" them — summaries, subject matter, etc.
-/// all work with no search step). If the corpus is larger than the budget, we
-/// fall back to including the chunks most relevant to the current message,
-/// selected by BM25, so large libraries still work.
+/// If the user's message clearly refers to ONE specific loaded document, return
+/// that document's source name. This lets "summarize the dario txt" load only
+/// dario.txt instead of the whole library — faster and far fewer tokens.
+fn matched_document(message: &str, sources: &[String]) -> Option<String> {
+    let msg = message.to_lowercase();
+    let mut best: Option<(usize, &String)> = None; // (match length, source)
+    for src in sources {
+        // Compare against the filename and its stem (without extension).
+        let lower = src.to_lowercase();
+        let stem  = lower.rsplit_once('.').map(|(s, _)| s).unwrap_or(&lower);
+        // Build candidate keys: full name, stem, and stem with separators as spaces.
+        let stem_spaced = stem.replace(['_', '-'], " ");
+        for key in [lower.as_str(), stem, stem_spaced.as_str()] {
+            if key.len() >= 3 && msg.contains(key) {
+                // Prefer the longest, most specific match.
+                if best.map(|(len, _)| key.len() > len).unwrap_or(true) {
+                    best = Some((key.len(), src));
+                }
+            }
+        }
+    }
+    best.map(|(_, s)| s.clone())
+}
+
+/// Build the document context placed in front of the model each turn.
+///
+///   * If the user names a specific document, include only that one (in full).
+///   * Else if all documents fit the budget, include them all (in full) — so
+///     the model genuinely knows them and summaries/subject questions just work.
+///   * Else include the excerpts most relevant to the message (BM25) up to the
+///     budget, so large libraries still work.
 ///
 /// Returns (context_text, included_sources, truncated).
 pub async fn build_context(store: &SharedStore, message: &str) -> (String, Vec<String>, bool) {
@@ -364,10 +390,25 @@ pub async fn build_context(store: &SharedStore, message: &str) -> (String, Vec<S
         by_source.entry(c.source.clone()).or_default().push(c);
     }
 
-    let total_chars: usize = guard.chunks.iter().map(|c| c.text.len()).sum();
+    // 1) Did the user name a specific document?
+    if let Some(target) = matched_document(message, &doc_order) {
+        let chunks = &by_source[&target];
+        let mut out = String::new();
+        out.push_str(&format!("\n===== DOCUMENT: {target} =====\n"));
+        let mut used = 0usize;
+        let mut truncated = false;
+        for c in chunks {
+            if used + c.text.len() > CONTEXT_CHAR_BUDGET { truncated = true; break; }
+            out.push_str(&c.text);
+            out.push('\n');
+            used += c.text.len();
+        }
+        return (out, vec![target], truncated);
+    }
 
+    // 2) Does everything fit? Include all documents in full.
+    let total_chars: usize = guard.chunks.iter().map(|c| c.text.len()).sum();
     if total_chars <= CONTEXT_CHAR_BUDGET {
-        // Everything fits — include every document in full.
         let mut out = String::new();
         let mut sources = Vec::new();
         for src in &doc_order {
@@ -375,31 +416,27 @@ pub async fn build_context(store: &SharedStore, message: &str) -> (String, Vec<S
             out.push_str(&format!("\n===== DOCUMENT: {src} =====\n"));
             for c in chunks {
                 out.push_str(&c.text);
-                out.push_str("\n");
+                out.push('\n');
             }
             sources.push(src.clone());
         }
         return (out, sources, false);
     }
 
-    // Too big for full inclusion: select the most relevant chunks by BM25 until
-    // we fill the budget.
-    let ranked = bm25_search(&guard.chunks, message, 10_000); // score all matching
-    let mut out = String::new();
-    let mut used = 0usize;
-    let mut sources_set: std::collections::BTreeSet<String> = Default::default();
-
-    // If the query had no keyword matches at all, fall back to the first chunks
-    // of each document so the model still has something representative.
+    // 3) Too big: include the most relevant excerpts up to the budget.
+    let ranked = bm25_search(&guard.chunks, message, 10_000);
     let selected: Vec<Hit> = if ranked.is_empty() {
-        guard.chunks.iter().take(60).map(|c| Hit {
+        guard.chunks.iter().take(40).map(|c| Hit {
             text: c.text.clone(), source: c.source.clone(), score: 0.0,
         }).collect()
     } else {
         ranked
     };
 
-    out.push_str("\n(Showing the most relevant excerpts from a large document set.)\n");
+    let mut out = String::new();
+    out.push_str("\n(Showing the most relevant excerpts from your documents.)\n");
+    let mut used = 0usize;
+    let mut sources_set: std::collections::BTreeSet<String> = Default::default();
     for h in selected {
         if used + h.text.len() > CONTEXT_CHAR_BUDGET { break; }
         out.push_str(&format!("\n----- from {} -----\n{}\n", h.source, h.text));
