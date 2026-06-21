@@ -74,6 +74,7 @@ impl RagSystem {
         if !bm25.is_empty() {
             info!("Rebuilt BM25 index from disk ({} chunks)", bm25.len());
         }
+        metrics::gauge!("rag_indexed_chunks").set(store.count().unwrap_or(0) as f64);
 
         Ok(Self {
             cfg,
@@ -156,6 +157,7 @@ impl RagSystem {
             }
         }
         info!("Indexed '{source}' ({n} chunks)");
+        metrics::gauge!("rag_indexed_chunks").set(self.store.count().unwrap_or(0) as f64);
         Ok(n)
     }
 
@@ -338,6 +340,7 @@ pub async fn remove_source(store: &SharedStore, name: &str) -> bool {
             .write()
             .expect("bm25 lock poisoned")
             .remove_source(name);
+        metrics::gauge!("rag_indexed_chunks").set(store.store.count().unwrap_or(0) as f64);
     }
     removed
 }
@@ -384,6 +387,7 @@ pub async fn rebuild(
 
     let count = store.store.count()?;
     info!("Rebuild complete ({count} chunks)");
+    metrics::gauge!("rag_indexed_chunks").set(count as f64);
     Ok(count)
 }
 

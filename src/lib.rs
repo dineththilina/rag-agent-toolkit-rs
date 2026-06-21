@@ -7,5 +7,7 @@
 pub mod agent;
 pub mod api;
 pub mod config;
+pub mod metrics;
 pub mod models;
 pub mod rag;
+pub mod sessions;

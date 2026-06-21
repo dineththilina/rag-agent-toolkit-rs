@@ -11,18 +11,17 @@
 //   4. Save the user+assistant turns to session memory and return the answer
 //
 // The documents are rebuilt every turn, so newly uploaded files are available
-// immediately. Session memory is a DashMap<session_id, Vec<Message>> holding
-// only the conversation turns (not the doc context); it lives in-process and a
-// restart clears it (fine for a demo).
+// immediately. Session memory holds only the conversation turns (not the doc
+// context) and is persisted to a local SQLite database (see `crate::sessions`),
+// so conversations survive a server restart.
 
 use anyhow::{Context, Result};
-use dashmap::DashMap;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::sync::Arc;
 
 use crate::config::Config;
+use crate::sessions::SessionStore;
 
 // ── Message types ─────────────────────────────────────────────────────────────
 
@@ -67,14 +66,6 @@ pub struct ToolUsed {
     pub detail: Value,
 }
 
-// ── Session store ─────────────────────────────────────────────────────────────
-
-pub type SessionStore = Arc<DashMap<String, Vec<Message>>>;
-
-pub fn new_session_store() -> SessionStore {
-    Arc::new(DashMap::new())
-}
-
 // ── System prompt ─────────────────────────────────────────────────────────────
 
 const SYSTEM: &str = "You are a knowledgeable assistant that answers questions about the user's documents. \
@@ -114,11 +105,11 @@ pub async fn chat(
         );
     }
 
-    // Conversation history (memory) for this session — user/assistant turns only.
-    let mut history: Vec<Message> = sessions
-        .get(session_id)
-        .map(|r| r.value().clone())
-        .unwrap_or_default();
+    // Conversation history (memory) for this session — user/assistant turns
+    // only, loaded from the persistent session store.
+    let history: Vec<Message> = sessions
+        .history(session_id)
+        .context("loading session history")?;
 
     // Build the document context fresh each turn so newly uploaded documents are
     // immediately available. This is the heart of the NotebookLM behaviour.
@@ -254,17 +245,14 @@ pub async fn chat(
         .and_then(|c| c.message.content)
         .unwrap_or_default();
 
-    // Save memory: append this user turn and the assistant reply to history.
-    // We deliberately do NOT store the system/document messages — those are
-    // rebuilt every turn so uploads/removals are always reflected.
-    history.push(user_turn);
-    history.push(assistant_msg(&answer));
-    // Cap history length to keep context manageable (keep last 20 turns).
-    if history.len() > 40 {
-        let start = history.len() - 40;
-        history = history[start..].to_vec();
-    }
-    sessions.insert(session_id.to_string(), history);
+    // Save memory: append this user turn and the assistant reply to the
+    // persistent session store. We deliberately do NOT store the
+    // system/document messages — those are rebuilt every turn so
+    // uploads/removals are always reflected. The store itself caps how many
+    // messages it keeps per session.
+    sessions
+        .append(session_id, &[user_turn, assistant_msg(&answer)])
+        .context("saving session history")?;
 
     // Report which documents informed the answer (all in-context ones).
     let tools_used = if !sources.is_empty() {

@@ -10,7 +10,7 @@ path = "src/main.rs"
 [dependencies]
 # Web server
 axum            = { version = "0.7", features = ["macros"] }
-tower-http      = { version = "0.5", features = ["fs", "cors", "trace"] }
+tower-http      = { version = "0.5", features = ["fs", "cors", "trace", "request-id"] }
 tokio           = { version = "1",   features = ["full"] }
 
 # HTTP client (for OpenAI-compatible API calls + HTTP tool)
@@ -45,11 +45,14 @@ anyhow          = "1"
 
 # Logging
 tracing         = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Metrics — exposed at GET /metrics in Prometheus text format.
+metrics         = "0.24"
+metrics-exporter-prometheus = { version = "0.18", default-features = false }
 
 # Misc
 uuid            = { version = "1", features = ["v4"] }
-dashmap         = "6"       # concurrent session memory store
 
 [dev-dependencies]
 # Async test runtime for the integration tests (the library is async).

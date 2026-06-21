@@ -128,9 +128,16 @@ to trace every retrieved answer back to its exact source document and chunk.
    ```
 2. **A free Groq key** for chat (the default). Get one in under a minute at
    [console.groq.com/keys](https://console.groq.com/keys) — no credit card.
-   Paste it into Settings on first launch. Prefer another provider? Settings has
-   presets for OpenAI, a local Ollama (no key), and LM Studio, or any
-   OpenAI-compatible API address.
+   Either paste it into Settings on first launch, or set it as an environment
+   variable before starting the server:
+   ```bash
+   export AGENT_API_KEY=gsk_your_key_here
+   cargo run --release
+   ```
+   The env var always wins over Settings/`config.toml` and is never written
+   back to disk — see [Secrets](#secrets) below. Prefer another provider?
+   Settings has presets for OpenAI, a local Ollama (no key), and LM Studio, or
+   any OpenAI-compatible API address.
 3. **The ONNX Runtime** for local embeddings. The default build links it
    *dynamically*, so it builds anywhere offline but needs the runtime present at
    launch — see [Local embeddings & the ONNX Runtime](#local-embeddings--the-onnx-runtime).
@@ -222,6 +229,55 @@ Try:
 
 ---
 
+## Secrets
+
+The chat API key (and the legacy embeddings key, unused by default) can come
+from two places, in this order:
+
+1. **`AGENT_API_KEY` / `AGENT_EMBEDDINGS_KEY` environment variables** —
+   always take precedence, and are never written back to `config.toml`.
+   This is the recommended path for anything beyond local/dev use.
+2. **`config.toml` / the Settings UI** — convenient for local use. The key is
+   redacted from every API response (`/api/config` only ever returns
+   `api_key_set: true/false`), never logged, and the file is gitignored and
+   locked to owner-only permissions (`chmod 600`) on every write.
+
+Startup logs which source is in effect (never the key itself), e.g. `Chat API
+key source: AGENT_API_KEY environment variable`.
+
+## Session memory
+
+Conversation turns (not the document context, which is rebuilt every turn)
+are persisted to a local SQLite database at **`./data/sessions.sqlite`**
+(gitignored) — so unlike earlier versions, restarting the server does **not**
+lose an in-progress conversation. Each session keeps its most recent 40
+messages; sessions idle for 30+ days are pruned once at startup. The chat
+transcript shown in the browser is separately cached in localStorage so the
+UI itself survives a page reload; use the **✎ New chat** button to start a
+fresh session (a new `session_id` — the old one's rows age out via the prune).
+
+## Logs and metrics
+
+- **Logs** — structured via `tracing`. `RUST_LOG=debug` (or any
+  [`EnvFilter`](https://docs.rs/tracing-subscriber) spec) controls verbosity;
+  `LOG_FORMAT=json` switches from human-readable lines to one JSON object per
+  line for log aggregators. Every request gets a `x-request-id` (a UUID, set
+  if the client didn't already send one), included in each request's trace
+  span and echoed back in the response header so a user-reported error can be
+  grepped straight out of the logs.
+- **Metrics** — Prometheus text format at **`GET /metrics`**:
+  `http_requests_total` and `http_request_duration_seconds` (labelled by
+  method, route, status) for every API call, plus `rag_indexed_chunks` (a
+  gauge tracking the size of the local index). Example scrape config:
+  ```yaml
+  scrape_configs:
+    - job_name: agent-toolkit
+      static_configs:
+        - targets: ["localhost:3000"]
+  ```
+
+---
+
 ## Build & test status
 
 This project builds and its tests pass on stable Rust:
@@ -250,9 +306,11 @@ agent-toolkit-rs/
 ├── src/
 │   ├── main.rs             # axum server, routes, startup, embeds the UI
 │   ├── lib.rs              # library surface (used by integration tests)
-│   ├── config.rs           # load/save config.toml (incl. retrieval settings)
+│   ├── config.rs           # load/save config.toml; AGENT_API_KEY env override
 │   ├── models.rs           # live model-list fetch from /models
 │   ├── agent.rs            # grounded chat + per-session memory
+│   ├── sessions.rs         # SQLite-backed persistent session memory
+│   ├── metrics.rs          # Prometheus recorder, HTTP middleware, /metrics
 │   ├── rag.rs              # RAG orchestrator (chunk → embed → store → retrieve)
 │   ├── rag/
 │   │   ├── types.rs        # chunk record, hit, retrieval mode, config
@@ -272,7 +330,7 @@ agent-toolkit-rs/
 ├── tests/
 │   └── rag_integration.rs  # black-box persistence + retrieval tests
 └── data/                   # sample docs (Helios Robotics, fictional)
-                            # + rag_vectors.sqlite (created at runtime, gitignored)
+                            # + rag_vectors.sqlite, sessions.sqlite (runtime, gitignored)
 ```
 
 ---
@@ -283,6 +341,7 @@ agent-toolkit-rs/
 |--------|----------------|----------------------------------------------------|
 | GET    | `/`            | Web UI                                              |
 | GET    | `/health`      | Liveness check                                     |
+| GET    | `/metrics`     | Prometheus metrics                                 |
 | GET    | `/api/config`  | Current config (key redacted)                      |
 | POST   | `/api/config`  | Save config                                        |
 | GET    | `/api/models`  | Live model list: `?base=<url>&key=<key>`           |
@@ -304,9 +363,10 @@ agent-toolkit-rs/
   `FASTEMBED_CACHE_DIR`).
 - The chat transcript is saved locally in your browser (localStorage), so it
   survives page reloads and app restarts; use the **✎ New chat** button to clear
-  it and start fresh. The backend conversation memory is in-process (a `DashMap`)
-  and resets when the server restarts, but the document index persists.
+  it and start fresh. Backend conversation memory is also persisted (see
+  [Session memory](#session-memory) above) — a server restart no longer drops it.
 - When a request fails (e.g. a provider rate-limit / 429), the error bubble shows
   a **↻ Retry** button that re-runs the same prompt in place.
-- `config.toml` holds your chat API key in plaintext and is gitignored. Treat it
-  like any local secrets file.
+- `config.toml` may hold your chat API key in plaintext if you're not using the
+  `AGENT_API_KEY` env var; it's gitignored and locked to owner-only permissions
+  on save — see [Secrets](#secrets) above.

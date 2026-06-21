@@ -3,15 +3,34 @@
 // Configuration is stored in a single config.toml next to the binary.
 // On first launch the file doesn't exist; the frontend's /api/config POST
 // creates it. All fields have sensible defaults so partial configs work.
+//
+// Secrets (api_key, embeddings_key): prefer the AGENT_API_KEY /
+// AGENT_EMBEDDINGS_KEY environment variables over config.toml. An env var
+// always wins over whatever is on disk, and — because it's already available
+// at process start — is never written back to config.toml, so the secret
+// never lands in plaintext on disk just because the app loaded it. Falling
+// back to storing a pasted key in config.toml is kept for local/dev
+// convenience (the file is gitignored and chmod'd 600 on write).
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use tracing::warn;
 
 // The path we look for / write config to.
 pub const CONFIG_PATH: &str = "config.toml";
+
+const ENV_API_KEY: &str = "AGENT_API_KEY";
+const ENV_EMBEDDINGS_KEY: &str = "AGENT_EMBEDDINGS_KEY";
+
+fn env_key(var: &str) -> Option<String> {
+    std::env::var(var)
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
@@ -76,6 +95,10 @@ pub struct Config {
     /// Path to the on-disk SQLite vector database. Default: data/rag_vectors.sqlite.
     #[serde(default = "default_vector_db_path")]
     pub vector_db_path: String,
+
+    /// Path to the on-disk SQLite session-memory database. Default: data/sessions.sqlite.
+    #[serde(default = "default_session_db_path")]
+    pub session_db_path: String,
 }
 
 fn default_embed_model() -> String {
@@ -103,15 +126,18 @@ fn default_embedding_dim() -> usize {
 fn default_vector_db_path() -> String {
     "data/rag_vectors.sqlite".into()
 }
+fn default_session_db_path() -> String {
+    "data/sessions.sqlite".into()
+}
 
 impl Config {
     /// The out-of-the-box default. Chat goes through Groq (free, one key);
     /// document search is BM25 (in-process, needs no key or service). So pasting
     /// one free Groq key makes everything work with nothing else to install.
     pub fn default_local() -> Self {
-        Self {
+        let mut cfg = Self {
             api_base: "https://api.groq.com/openai/v1".into(),
-            api_key: String::new(), // user pastes a free Groq key
+            api_key: String::new(), // user pastes a free Groq key, or set AGENT_API_KEY
             model: "llama-3.3-70b-versatile".into(),
             embeddings_base: String::new(),
             embeddings_model: "local".into(), // unused; kept for config compat
@@ -123,7 +149,10 @@ impl Config {
             embedding_model: default_embedding_model(),
             embedding_dim: default_embedding_dim(),
             vector_db_path: default_vector_db_path(),
-        }
+            session_db_path: default_session_db_path(),
+        };
+        cfg.apply_env_secrets();
+        cfg
     }
 }
 
@@ -143,6 +172,32 @@ impl Default for Config {
             embedding_model: default_embedding_model(),
             embedding_dim: default_embedding_dim(),
             vector_db_path: default_vector_db_path(),
+            session_db_path: default_session_db_path(),
+        }
+    }
+}
+
+impl Config {
+    /// Apply AGENT_API_KEY / AGENT_EMBEDDINGS_KEY overrides, if set. An env
+    /// var always wins over whatever is in config.toml or posted by the UI.
+    pub fn apply_env_secrets(&mut self) {
+        if let Some(k) = env_key(ENV_API_KEY) {
+            self.api_key = k;
+        }
+        if let Some(k) = env_key(ENV_EMBEDDINGS_KEY) {
+            self.embeddings_key = k;
+        }
+    }
+
+    /// Human-readable source of the chat API key, for startup logging. Never
+    /// reveals the key itself.
+    pub fn api_key_source(&self) -> &'static str {
+        if env_key(ENV_API_KEY).is_some() {
+            "AGENT_API_KEY environment variable"
+        } else if !self.api_key.is_empty() {
+            "config.toml (consider moving it to the AGENT_API_KEY env var instead)"
+        } else {
+            "none set"
         }
     }
 }
@@ -155,14 +210,43 @@ pub fn load() -> Result<Option<Config>> {
         return Ok(None);
     }
     let text = std::fs::read_to_string(&path).context("reading config.toml")?;
-    let cfg: Config = toml::from_str(&text).context("parsing config.toml")?;
+    let mut cfg: Config = toml::from_str(&text).context("parsing config.toml")?;
+    cfg.apply_env_secrets();
     Ok(Some(cfg))
 }
 
+/// Persist config to disk. Secrets sourced from an environment variable are
+/// never written back to the file — only a key the user actually pasted into
+/// config.toml (or the setup UI, with no env var set) is persisted there.
 pub fn save(cfg: &Config) -> Result<()> {
-    let text = toml::to_string_pretty(cfg).context("serializing config")?;
+    let mut on_disk = cfg.clone();
+    if env_key(ENV_API_KEY).is_some() {
+        on_disk.api_key = String::new();
+    }
+    if env_key(ENV_EMBEDDINGS_KEY).is_some() {
+        on_disk.embeddings_key = String::new();
+    }
+
+    let text = toml::to_string_pretty(&on_disk).context("serializing config")?;
     std::fs::write(CONFIG_PATH, text).context("writing config.toml")?;
+    restrict_permissions(CONFIG_PATH);
     Ok(())
+}
+
+/// Best-effort lockdown of config.toml to owner-only (it may contain a
+/// plaintext API key). No-op on platforms without Unix permission bits.
+fn restrict_permissions(path: &str) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Err(e) = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)) {
+            warn!("Could not restrict permissions on {path}: {e}");
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
 }
 
 // ── Shared mutable state ─────────────────────────────────────────────────────

@@ -22,7 +22,7 @@ use crate::rag::{self, SharedStore};
 pub struct AppState {
     pub cfg: SharedConfig,
     pub client: Client,
-    pub sessions: crate::agent::SessionStore,
+    pub sessions: crate::sessions::SessionStore,
     pub store: SharedStore,
 }
 
@@ -75,7 +75,7 @@ pub async fn post_config(
     // provider settings from the UI never silently resets them.
     let base = state.cfg.read().await.clone().unwrap_or_default();
 
-    let new_cfg = Config {
+    let mut new_cfg = Config {
         api_base: payload.api_base.trim().to_string(),
         api_key: payload.api_key.unwrap_or_default().trim().to_string(),
         model: payload.model.trim().to_string(),
@@ -103,7 +103,11 @@ pub async fn post_config(
         embedding_model: payload.embedding_model.unwrap_or(base.embedding_model),
         embedding_dim: base.embedding_dim,
         vector_db_path: base.vector_db_path.clone(),
+        session_db_path: base.session_db_path.clone(),
     };
+    // An AGENT_API_KEY / AGENT_EMBEDDINGS_KEY env var always wins over
+    // whatever the setup UI just posted.
+    new_cfg.apply_env_secrets();
 
     // Validate: try fetching models to confirm the API is reachable.
     if let Err(e) = models::fetch(&state.client, &new_cfg.api_base, &new_cfg.api_key).await {

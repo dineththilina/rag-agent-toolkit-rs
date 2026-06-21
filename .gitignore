@@ -19,5 +19,9 @@ data/rag_vectors.sqlite-*
 *.sqlite-wal
 *.sqlite-shm
 
+# Persistent session memory (SQLite), created under data/
+data/sessions.sqlite
+data/sessions.sqlite-*
+
 # Cached embedding model weights (downloaded on first run by fastembed)
 .fastembed_cache/

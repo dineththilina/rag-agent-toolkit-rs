@@ -9,21 +9,25 @@
 use std::net::SocketAddr;
 
 use axum::{
-    http::StatusCode,
+    extract::Request,
+    http::{HeaderName, StatusCode},
     response::{Html, IntoResponse},
     routing::{get, post},
     Router,
 };
 use reqwest::Client;
 use tower_http::cors::{Any, CorsLayer};
+use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
 use tower_http::trace::TraceLayer;
 use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 
-use agent_toolkit::{agent, api, config, rag};
+use agent_toolkit::{api, config, metrics, rag, sessions};
 use api::chat::post_chat;
 use api::config::{get_config, get_models, post_config, AppState};
 use api::rag::post_rag;
+
+const REQUEST_ID_HEADER: &str = "x-request-id";
 
 // The single HTML file is embedded into the binary at compile time so the
 // binary is truly self-contained — no templates directory needed at runtime.
@@ -39,13 +43,20 @@ async fn health() -> impl IntoResponse {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // Logging: RUST_LOG=info by default, override with e.g. RUST_LOG=debug
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new("info,agent_toolkit=debug")),
-        )
-        .init();
+    // Logging: RUST_LOG=info by default, override with e.g. RUST_LOG=debug.
+    // LOG_FORMAT=json switches to structured JSON lines for log aggregators
+    // (the default human-readable format is friendlier for local dev).
+    let env_filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("info,agent_toolkit=debug"));
+    let json_logs = std::env::var("LOG_FORMAT").is_ok_and(|v| v.eq_ignore_ascii_case("json"));
+    if json_logs {
+        tracing_subscriber::fmt()
+            .json()
+            .with_env_filter(env_filter)
+            .init();
+    } else {
+        tracing_subscriber::fmt().with_env_filter(env_filter).init();
+    }
 
     // Load saved config, or fall back to a sensible default that points at a
     // local Ollama. This means the app boots straight into a working chat UI:
@@ -68,6 +79,7 @@ async fn main() -> anyhow::Result<()> {
             config::Config::default_local()
         }
     };
+    info!("Chat API key source: {}", initial_cfg.api_key_source());
 
     let http_client = Client::builder()
         .timeout(std::time::Duration::from_secs(120))
@@ -83,10 +95,20 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
+    // Persistent session memory: conversation turns survive a server restart
+    // (the backend used to keep them only in an in-process map).
+    let sessions = match sessions::open(&initial_cfg.session_db_path) {
+        Ok(s) => s,
+        Err(e) => {
+            error!("Could not open the session store: {e:#}");
+            return Err(e);
+        }
+    };
+
     let state = AppState {
         cfg: config::new_shared(Some(initial_cfg.clone())),
         client: http_client.clone(),
-        sessions: agent::new_session_store(),
+        sessions,
         store: store.clone(),
     };
 
@@ -106,12 +128,20 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
+    // Prometheus metrics, exposed at GET /metrics. The HTTP-level counter and
+    // histogram are recorded by `metrics::track` below; app-level gauges
+    // (e.g. rag_indexed_chunks) are updated directly where the RAG index
+    // changes.
+    let metrics_handle = metrics::install();
+
     let cors = CorsLayer::new()
         .allow_origin(Any)
         .allow_methods(Any)
         .allow_headers(Any);
 
-    let app = Router::new()
+    let request_id_header = HeaderName::from_static(REQUEST_ID_HEADER);
+
+    let app_routes = Router::new()
         // UI
         .route("/", get(serve_index))
         .route("/health", get(health))
@@ -126,9 +156,33 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/sources", get(api::upload::get_sources))
         .route("/api/remove", post(api::upload::post_remove))
         .route("/api/rebuild", post(api::upload::post_rebuild))
-        .layer(cors)
-        .layer(TraceLayer::new_for_http())
+        .route_layer(axum::middleware::from_fn(metrics::track))
         .with_state(state);
+
+    let metrics_routes = Router::new()
+        .route("/metrics", get(metrics::handler))
+        .with_state(metrics_handle);
+
+    let app = app_routes
+        .merge(metrics_routes)
+        .layer(PropagateRequestIdLayer::new(request_id_header.clone()))
+        .layer(
+            TraceLayer::new_for_http().make_span_with(move |req: &Request| {
+                let request_id = req
+                    .headers()
+                    .get(REQUEST_ID_HEADER)
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or("-");
+                tracing::info_span!(
+                    "http_request",
+                    method = %req.method(),
+                    path = %req.uri().path(),
+                    request_id = %request_id,
+                )
+            }),
+        )
+        .layer(SetRequestIdLayer::new(request_id_header, MakeRequestUuid))
+        .layer(cors);
 
     let port: u16 = std::env::var("PORT")
         .ok()
