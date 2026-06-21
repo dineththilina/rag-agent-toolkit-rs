@@ -6,12 +6,6 @@
 // serves the setup screen. Once the user completes setup via the UI,
 // POST /api/config saves config.toml and the chat UI loads.
 
-mod agent;
-mod api;
-mod config;
-mod models;
-mod rag;
-
 use std::net::SocketAddr;
 
 use axum::{
@@ -23,11 +17,12 @@ use axum::{
 use reqwest::Client;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 
-use api::config::{AppState, get_config, get_models, post_config};
+use agent_toolkit::{agent, api, config, rag};
 use api::chat::post_chat;
+use api::config::{get_config, get_models, post_config, AppState};
 use api::rag::post_rag;
 
 // The single HTML file is embedded into the binary at compile time so the
@@ -58,7 +53,10 @@ async fn main() -> anyhow::Result<()> {
     // the chat UI still loads and a single inline message guides them.
     let initial_cfg = match config::load() {
         Ok(Some(cfg)) => {
-            info!("Loaded config: api_base={} model={}", cfg.api_base, cfg.model);
+            info!(
+                "Loaded config: api_base={} model={}",
+                cfg.api_base, cfg.model
+            );
             cfg
         }
         Ok(None) => {
@@ -75,46 +73,59 @@ async fn main() -> anyhow::Result<()> {
         .timeout(std::time::Duration::from_secs(120))
         .build()?;
 
-    // Shared, in-process vector store (no external DB).
-    let store = rag::new_shared_store();
-
-    let state = AppState {
-        cfg:      config::new_shared(Some(initial_cfg.clone())),
-        client:   http_client.clone(),
-        sessions: agent::new_session_store(),
-        store:    store.clone(),
+    // Shared, on-disk vector store: local SQLite + sqlite-vec. No external DB,
+    // no Docker. Opening it is fast; the embedding model loads separately below.
+    let store = match rag::new_shared_store(&initial_cfg) {
+        Ok(s) => s,
+        Err(e) => {
+            error!("Could not open the local vector store: {e:#}");
+            return Err(e);
+        }
     };
 
-    // Build the embedded index in the background so the first chat/RAG request
-    // is fast. Reuses vectors.json if valid. Failures here are non-fatal — they
-    // just mean the first RAG query waits, or surfaces a clear error.
+    let state = AppState {
+        cfg: config::new_shared(Some(initial_cfg.clone())),
+        client: http_client.clone(),
+        sessions: agent::new_session_store(),
+        store: store.clone(),
+    };
+
+    // In the background: load the local embedding model (the first run may
+    // download it; afterwards it's cached for offline use), then build the
+    // index. Both steps are non-fatal — if the model can't load, the app falls
+    // back to keyword (BM25) retrieval, and indexing retries on demand.
     {
         let client = http_client.clone();
-        let store  = store.clone();
-        let cfg    = initial_cfg;
+        let store = store.clone();
+        let cfg = initial_cfg;
         tokio::spawn(async move {
+            rag::init_embedder(&cfg, &store).await;
             if let Err(e) = rag::build_index(&client, &cfg, &store).await {
-                warn!("Background index build failed (will retry on demand): {e}");
+                warn!("Background index build failed (will retry on demand): {e:#}");
             }
         });
     }
 
-    let cors = CorsLayer::new().allow_origin(Any).allow_methods(Any).allow_headers(Any);
+    let cors = CorsLayer::new()
+        .allow_origin(Any)
+        .allow_methods(Any)
+        .allow_headers(Any);
 
     let app = Router::new()
         // UI
-        .route("/",              get(serve_index))
-        .route("/health",        get(health))
+        .route("/", get(serve_index))
+        .route("/health", get(health))
         // Config + models
-        .route("/api/config",    get(get_config).post(post_config))
-        .route("/api/models",    get(get_models))
+        .route("/api/config", get(get_config).post(post_config))
+        .route("/api/models", get(get_models))
         // Chat + RAG
-        .route("/api/chat",      post(post_chat))
-        .route("/api/rag",       post(post_rag))
+        .route("/api/chat", post(post_chat))
+        .route("/api/rag", post(post_rag))
         // Document upload + listing
-        .route("/api/upload",    post(crate::api::upload::post_upload))
-        .route("/api/sources",   get(crate::api::upload::get_sources))
-        .route("/api/remove",    post(crate::api::upload::post_remove))
+        .route("/api/upload", post(api::upload::post_upload))
+        .route("/api/sources", get(api::upload::get_sources))
+        .route("/api/remove", post(api::upload::post_remove))
+        .route("/api/rebuild", post(api::upload::post_rebuild))
         .layer(cors)
         .layer(TraceLayer::new_for_http())
         .with_state(state);

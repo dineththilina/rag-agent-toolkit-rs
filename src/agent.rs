@@ -28,42 +28,42 @@ use crate::config::Config;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
-    pub role:         String,
-    pub content:      Option<String>,
+    pub role: String,
+    pub content: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub tool_calls:   Option<Vec<ToolCall>>,
+    pub tool_calls: Option<Vec<ToolCall>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub name:         Option<String>,
+    pub name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCall {
-    pub id:       String,
+    pub id: String,
     #[serde(rename = "type")]
-    pub kind:     String,
+    pub kind: String,
     pub function: ToolFunction,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolFunction {
-    pub name:      String,
-    pub arguments: String,  // JSON string from the model
+    pub name: String,
+    pub arguments: String, // JSON string from the model
 }
 
 // ── Per-turn result ───────────────────────────────────────────────────────────
 
 #[derive(Debug, Serialize)]
 pub struct TurnResult {
-    pub answer:     String,
+    pub answer: String,
     pub tools_used: Vec<ToolUsed>,
-    pub sources:    Vec<String>,    // document filenames from RAG hits
+    pub sources: Vec<String>, // document filenames from RAG hits
 }
 
 #[derive(Debug, Serialize)]
 pub struct ToolUsed {
-    pub tool:   String,
+    pub tool: String,
     pub detail: Value,
 }
 
@@ -98,12 +98,12 @@ Treat their contents as your working knowledge for this conversation.\
 // Conversation history is preserved for memory/follow-ups.
 
 pub async fn chat(
-    message:    &str,
+    message: &str,
     session_id: &str,
-    client:     &Client,
-    cfg:        &Config,
-    sessions:   &SessionStore,
-    store:      &crate::rag::SharedStore,
+    client: &Client,
+    cfg: &Config,
+    sessions: &SessionStore,
+    store: &crate::rag::SharedStore,
 ) -> Result<TurnResult> {
     // Guard: a hosted provider (anything not on localhost) needs a key.
     let is_local = cfg.api_base.contains("localhost") || cfg.api_base.contains("127.0.0.1");
@@ -122,8 +122,7 @@ pub async fn chat(
 
     // Build the document context fresh each turn so newly uploaded documents are
     // immediately available. This is the heart of the NotebookLM behaviour.
-    let (doc_context, sources, truncated) =
-        crate::rag::build_context(store, message).await;
+    let (doc_context, sources, truncated) = crate::rag::build_context(store, cfg, message).await;
 
     // Assemble the messages sent to the model:
     //   1. system instructions
@@ -145,7 +144,9 @@ pub async fn chat(
         } else {
             "Below are the user's documents in full. Treat their contents as your knowledge for this conversation.\n"
         };
-        messages.push(sys_msg(&format!("{note}\n===== DOCUMENTS =====\n{doc_context}\n===== END DOCUMENTS =====")));
+        messages.push(sys_msg(&format!(
+            "{note}\n===== DOCUMENTS =====\n{doc_context}\n===== END DOCUMENTS ====="
+        )));
     }
 
     // Prior conversation (already excludes any system/doc messages — see save below).
@@ -167,7 +168,9 @@ pub async fn chat(
         attempt += 1;
 
         let mut req = client.post(&url).json(&body);
-        if !cfg.api_key.is_empty() { req = req.bearer_auth(&cfg.api_key); }
+        if !cfg.api_key.is_empty() {
+            req = req.bearer_auth(&cfg.api_key);
+        }
 
         let r = match req.send().await {
             Ok(r) => r,
@@ -196,31 +199,58 @@ pub async fn chat(
         let text = resp.text().await.unwrap_or_default();
         let lc = text.to_lowercase();
 
-        if status.as_u16() == 401 || status.as_u16() == 403
-            || lc.contains("invalid api key") || lc.contains("incorrect api key")
-            || lc.contains("unauthorized") {
+        if status.as_u16() == 401
+            || status.as_u16() == 403
+            || lc.contains("invalid api key")
+            || lc.contains("incorrect api key")
+            || lc.contains("unauthorized")
+        {
             anyhow::bail!("BAD_KEY: That API key was rejected. Open Settings and paste a valid Groq key (free at console.groq.com/keys).");
         }
-        if lc.contains("model") && (lc.contains("not found") || lc.contains("does not exist")
-            || lc.contains("decommissioned")) {
+        if lc.contains("model")
+            && (lc.contains("not found")
+                || lc.contains("does not exist")
+                || lc.contains("decommissioned"))
+        {
             anyhow::bail!("BAD_MODEL: The selected model isn't available. Open Settings, click 'See list', and pick one.");
         }
-        if lc.contains("context") && (lc.contains("length") || lc.contains("maximum") || lc.contains("too large") || lc.contains("token")) {
+        if lc.contains("context")
+            && (lc.contains("length")
+                || lc.contains("maximum")
+                || lc.contains("too large")
+                || lc.contains("token"))
+        {
             anyhow::bail!("TOO_BIG: Those documents are too large to fit all at once. Try removing some, or ask a specific question so I can focus on the relevant parts.");
         }
-        anyhow::bail!("The AI service returned an error ({status}). {}",
-            if text.len() > 300 { &text[..300] } else { &text });
+        anyhow::bail!(
+            "The AI service returned an error ({status}). {}",
+            if text.len() > 300 {
+                &text[..300]
+            } else {
+                &text
+            }
+        );
     }
 
     #[derive(Deserialize)]
-    struct CompResp { choices: Vec<Choice> }
+    struct CompResp {
+        choices: Vec<Choice>,
+    }
     #[derive(Deserialize)]
-    struct Choice { message: AssistantMsg }
+    struct Choice {
+        message: AssistantMsg,
+    }
     #[derive(Deserialize)]
-    struct AssistantMsg { #[serde(default)] content: Option<String> }
+    struct AssistantMsg {
+        #[serde(default)]
+        content: Option<String>,
+    }
 
     let parsed: CompResp = resp.json().await.context("reading the AI's reply")?;
-    let answer = parsed.choices.into_iter().next()
+    let answer = parsed
+        .choices
+        .into_iter()
+        .next()
         .and_then(|c| c.message.content)
         .unwrap_or_default();
 
@@ -246,22 +276,41 @@ pub async fn chat(
         Vec::new()
     };
 
-    Ok(TurnResult { answer, tools_used, sources })
+    Ok(TurnResult {
+        answer,
+        tools_used,
+        sources,
+    })
 }
 
 // ── Message constructors ──────────────────────────────────────────────────────
 
 fn sys_msg(text: &str) -> Message {
-    Message { role: "system".into(), content: Some(text.into()),
-        tool_calls: None, tool_call_id: None, name: None }
+    Message {
+        role: "system".into(),
+        content: Some(text.into()),
+        tool_calls: None,
+        tool_call_id: None,
+        name: None,
+    }
 }
 fn user_msg(text: &str) -> Message {
-    Message { role: "user".into(), content: Some(text.into()),
-        tool_calls: None, tool_call_id: None, name: None }
+    Message {
+        role: "user".into(),
+        content: Some(text.into()),
+        tool_calls: None,
+        tool_call_id: None,
+        name: None,
+    }
 }
 fn assistant_msg(text: &str) -> Message {
-    Message { role: "assistant".into(), content: Some(text.into()),
-        tool_calls: None, tool_call_id: None, name: None }
+    Message {
+        role: "assistant".into(),
+        content: Some(text.into()),
+        tool_calls: None,
+        tool_call_id: None,
+        name: None,
+    }
 }
 
 /// Extract the suggested wait time (in seconds) from a rate-limit response body,
@@ -272,7 +321,8 @@ fn parse_retry_secs(body: &str) -> Option<f64> {
     let tail = lower[idx + "try again in".len()..].trim_start();
 
     // The number.
-    let num: String = tail.chars()
+    let num: String = tail
+        .chars()
         .take_while(|c| c.is_ascii_digit() || *c == '.')
         .collect();
     let val: f64 = num.parse().ok()?;
@@ -282,6 +332,6 @@ fn parse_retry_secs(body: &str) -> Option<f64> {
     if unit.starts_with("ms") {
         Some(val / 1000.0)
     } else {
-        Some(val)   // assume seconds
+        Some(val) // assume seconds
     }
 }

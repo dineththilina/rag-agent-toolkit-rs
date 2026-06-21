@@ -20,10 +20,10 @@ use crate::rag::{self, SharedStore};
 
 #[derive(Clone)]
 pub struct AppState {
-    pub cfg:      SharedConfig,
-    pub client:   Client,
+    pub cfg: SharedConfig,
+    pub client: Client,
     pub sessions: crate::agent::SessionStore,
-    pub store:    SharedStore,
+    pub store: SharedStore,
 }
 
 // ── GET /api/config ──────────────────────────────────────────────────────────
@@ -40,6 +40,12 @@ pub async fn get_config(State(state): State<AppState>) -> Json<Value> {
             "model":            c.model,
             "embeddings_model": c.embeddings_model,
             "data_dir":         c.data_dir,
+            // Local vector RAG settings.
+            "retrieval_mode":   c.retrieval_mode,
+            "top_k":            c.top_k,
+            "min_similarity":   c.min_similarity,
+            "embedding_model":  c.embedding_model,
+            "embedding_dim":    c.embedding_dim,
         })),
     }
 }
@@ -48,27 +54,55 @@ pub async fn get_config(State(state): State<AppState>) -> Json<Value> {
 
 #[derive(Deserialize)]
 pub struct ConfigPayload {
-    pub api_base:         String,
-    pub api_key:          Option<String>,
-    pub model:            String,
-    pub embeddings_base:  Option<String>,
+    pub api_base: String,
+    pub api_key: Option<String>,
+    pub model: String,
+    pub embeddings_base: Option<String>,
     pub embeddings_model: Option<String>,
-    pub embeddings_key:   Option<String>,
+    pub embeddings_key: Option<String>,
+    // Optional local vector RAG settings; omitted fields keep their current value.
+    pub retrieval_mode: Option<String>,
+    pub top_k: Option<usize>,
+    pub min_similarity: Option<f32>,
+    pub embedding_model: Option<String>,
 }
 
 pub async fn post_config(
     State(state): State<AppState>,
     Json(payload): Json<ConfigPayload>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    // Carry over existing RAG settings (and data_dir / db path / dim) so saving
+    // provider settings from the UI never silently resets them.
+    let base = state.cfg.read().await.clone().unwrap_or_default();
+
     let new_cfg = Config {
-        api_base:         payload.api_base.trim().to_string(),
-        api_key:          payload.api_key.unwrap_or_default().trim().to_string(),
-        model:            payload.model.trim().to_string(),
-        embeddings_base:  payload.embeddings_base.unwrap_or_default().trim().to_string(),
-        embeddings_model: payload.embeddings_model
+        api_base: payload.api_base.trim().to_string(),
+        api_key: payload.api_key.unwrap_or_default().trim().to_string(),
+        model: payload.model.trim().to_string(),
+        embeddings_base: payload
+            .embeddings_base
+            .unwrap_or_default()
+            .trim()
+            .to_string(),
+        embeddings_model: payload
+            .embeddings_model
             .unwrap_or_else(|| "text-embedding-3-small".into()),
-        embeddings_key:   payload.embeddings_key.unwrap_or_default().trim().to_string(),
-        data_dir:         "data".into(),
+        embeddings_key: payload
+            .embeddings_key
+            .unwrap_or_default()
+            .trim()
+            .to_string(),
+        data_dir: if base.data_dir.trim().is_empty() {
+            "data".into()
+        } else {
+            base.data_dir.clone()
+        },
+        retrieval_mode: payload.retrieval_mode.unwrap_or(base.retrieval_mode),
+        top_k: payload.top_k.unwrap_or(base.top_k),
+        min_similarity: payload.min_similarity.unwrap_or(base.min_similarity),
+        embedding_model: payload.embedding_model.unwrap_or(base.embedding_model),
+        embedding_dim: base.embedding_dim,
+        vector_db_path: base.vector_db_path.clone(),
     };
 
     // Validate: try fetching models to confirm the API is reachable.
@@ -105,7 +139,7 @@ pub async fn post_config(
 #[derive(Deserialize)]
 pub struct ModelsQuery {
     pub base: String,
-    pub key:  Option<String>,
+    pub key: Option<String>,
 }
 
 pub async fn get_models(
@@ -115,7 +149,7 @@ pub async fn get_models(
     let key = q.key.as_deref().unwrap_or("");
     match models::fetch(&state.client, &q.base, key).await {
         Ok(list) => Ok(Json(json!({ "models": list }))),
-        Err(e)   => Err((
+        Err(e) => Err((
             StatusCode::BAD_GATEWAY,
             Json(json!({ "error": e.to_string() })),
         )),

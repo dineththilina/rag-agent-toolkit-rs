@@ -30,11 +30,7 @@ struct ModelRaw {
 
 /// Fetch models from `{base_url}/models`.
 /// Returns them sorted by id so the list is stable across calls.
-pub async fn fetch(
-    client: &Client,
-    base_url: &str,
-    api_key: &str,
-) -> Result<Vec<Model>> {
+pub async fn fetch(client: &Client, base_url: &str, api_key: &str) -> Result<Vec<Model>> {
     let url = format!("{}/models", base_url.trim_end_matches('/'));
 
     let mut req = client.get(&url);
@@ -42,21 +38,15 @@ pub async fn fetch(
         req = req.bearer_auth(api_key);
     }
 
-    let resp = req
-        .send()
-        .await
-        .context("reaching the models endpoint")?;
+    let resp = req.send().await.context("reaching the models endpoint")?;
 
     if !resp.status().is_success() {
         let status = resp.status();
-        let body   = resp.text().await.unwrap_or_default();
+        let body = resp.text().await.unwrap_or_default();
         anyhow::bail!("models endpoint returned {}: {}", status, body);
     }
 
-    let parsed: ModelsResponse = resp
-        .json()
-        .await
-        .context("parsing models response")?;
+    let parsed: ModelsResponse = resp.json().await.context("parsing models response")?;
 
     let mut models: Vec<Model> = parsed
         .data

@@ -23,14 +23,19 @@ serde_json      = "1"
 # Config
 toml            = "0.8"
 
-# Vector store — embedded in-process (Vec + cosine similarity), persisted to
-# vectors.json. No external database, no Docker.
+# Local vector store — SQLite on disk (data/rag_vectors.sqlite) with the
+# sqlite-vec extension for KNN search. Both the SQLite engine and the vec
+# extension are compiled from vendored C source (rusqlite "bundled" +
+# sqlite-vec), so there is no external database, no Docker, and no network at
+# build time. rusqlite is pinned to 0.37 because newer libsqlite3-sys uses an
+# unstable `cfg_select!` that doesn't build on stable Rust.
+rusqlite        = { version = "0.37", features = ["bundled"] }
+sqlite-vec      = "0.1"
 
-# Embeddings — we call the embeddings endpoint of the configured provider
-# (OpenAI-compatible: works with OpenAI, Ollama, LM Studio, etc.)
-
-# Text chunking (pure Rust, no ML weights)
-text-splitter   = { version = "0.17", features = ["markdown"] }
+# Local embeddings — fastembed runs ONNX models locally (no embedding API key).
+# The ONNX Runtime / TLS backend is selected by the cargo features below.
+# Optional + default so a lightweight `--no-default-features` build still works.
+fastembed       = { version = "5", default-features = false, optional = true }
 
 # PDF text extraction happens in the browser (pdf.js), not in Rust, so no
 # PDF crate is needed here.
@@ -45,6 +50,29 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Misc
 uuid            = { version = "1", features = ["v4"] }
 dashmap         = "6"       # concurrent session memory store
+
+[dev-dependencies]
+# Async test runtime for the integration tests (the library is async).
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+[features]
+# Local neural embeddings via fastembed are on by default.
+default = ["local-embeddings"]
+
+# Default embeddings build: `ort-load-dynamic` compiles the bindings WITHOUT a
+# build-time download, so the project builds offline everywhere (CI, sandboxes,
+# air-gapped). At runtime the ONNX Runtime shared library is loaded dynamically
+# — make it available to `ort` (e.g. set ORT_DYLIB_PATH; see the README).
+local-embeddings = ["dep:fastembed", "fastembed/ort-load-dynamic", "fastembed/hf-hub-rustls-tls"]
+
+# Convenience build: Cargo downloads a prebuilt ONNX Runtime at build time so
+# there is nothing to install at runtime. Needs network to the ort CDN at build
+# time. Use it instead of the default:
+#   cargo build --no-default-features --features local-embeddings-managed
+local-embeddings-managed = ["dep:fastembed", "fastembed/ort-download-binaries-rustls-tls", "fastembed/hf-hub-rustls-tls"]
+
+# Disable both for a fast, keyword-only (BM25) build that still uses the local
+# SQLite vector schema: `cargo build --no-default-features`.
 
 [profile.release]
 opt-level = 3

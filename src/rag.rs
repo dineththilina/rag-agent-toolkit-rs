@@ -1,364 +1,431 @@
 // src/rag.rs
 //
-// Document search using BM25 — the ranking function real search engines use.
-// No embeddings, no API key, no external service, no model download. Pure Rust.
+// Retrieval-augmented generation: the orchestrator that ties together
+// deterministic chunking, local embeddings, the on-disk sqlite-vec vector
+// store, and the preserved BM25 keyword index — fused into one ranking.
 //
-//   1. Load documents from data/ (txt, md) — PDFs are read in the browser
-//   2. Chunk with text-splitter
-//   3. Tokenize each chunk (lowercase, split on non-alphanumeric, drop stopwords)
-//   4. Store chunks + token stats in-process, persisted to index.json
-//   5. retrieve(query) -> BM25 score every chunk -> top-k Hits
+// Pipeline:
+//   upload/ingest → chunk (chunk.rs) → embed (embed.rs / fastembed_provider.rs)
+//                 → store on disk (store.rs, sqlite-vec) + BM25 (bm25.rs)
+//   query         → embed query → vector KNN + BM25 → fuse (hybrid.rs) → cited
+//                   chunks fed into the chat context
 //
-// Why BM25 instead of vector embeddings: a hand-rolled local embedding is too
-// weak to separate relevant from irrelevant text, and requiring a hosted
-// embedding API means a second key. BM25 is keyword-based, needs nothing, and
-// gives sharp, correct rankings for the document-Q&A this app does.
+// SQLite is the single source of truth; the BM25 index is rebuilt from it on
+// startup, so indexed documents stay searchable across restarts. If the local
+// embedding model can't load, the system degrades cleanly to keyword retrieval.
+
+mod bm25;
+mod chunk;
+pub mod embed;
+#[cfg(feature = "local-embeddings")]
+mod fastembed_provider;
+mod hybrid;
+mod store;
+pub mod types;
+
+use std::path::Path;
+use std::sync::{Arc, RwLock};
 
 use anyhow::{Context, Result};
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::path::Path;
-use std::sync::Arc;
-use text_splitter::TextSplitter;
-use tokio::sync::RwLock;
 use tracing::{info, warn};
 
 use crate::config::Config;
 
-const STORE_PATH: &str = "index.json";
-const CHUNK_SIZE: usize = 700;
+use self::bm25::Bm25Index;
+use self::embed::EmbeddingProvider;
+use self::store::{SqliteVecStore, VectorStore};
+use self::types::HitSource;
 
-// BM25 tuning constants (standard defaults).
-const BM25_K1: f32 = 1.5;
-const BM25_B:  f32 = 0.75;
+pub use self::types::{Hit, RagConfig, RetrievalMode};
 
-// Common English words that add noise to keyword matching.
-const STOPWORDS: &[&str] = &[
-    "a","an","the","of","to","in","on","at","for","and","or","but","is","are",
-    "was","were","be","been","being","this","that","these","those","it","its",
-    "as","by","with","from","into","over","under","do","does","did","have","has",
-    "had","will","would","can","could","should","i","you","he","she","we","they",
-    "my","your","his","her","our","their","what","which","who","when","where",
-    "why","how","not","no","yes","if","then","else","than","there","here","about",
-    "me","him","them","us","so","up","out","off","all","any","some","more","most",
-];
+/// Roughly 4 characters per token. We budget context by characters to stay
+/// simple. ~32k chars ≈ ~8k tokens, comfortably inside common free-tier limits.
+const CONTEXT_CHAR_BUDGET: usize = 32_000;
 
-fn is_stopword(w: &str) -> bool {
-    STOPWORDS.contains(&w)
+// ── The system ───────────────────────────────────────────────────────────────
+
+/// The whole retrieval system. Held behind an `Arc` and shared across requests;
+/// all interior state uses its own locks, so no outer lock is needed.
+pub struct RagSystem {
+    cfg: RagConfig,
+    store: SqliteVecStore,
+    bm25: RwLock<Bm25Index>,
+    embedder: RwLock<Option<Arc<dyn EmbeddingProvider>>>,
 }
 
-/// Tokenize: lowercase, split on non-alphanumeric, drop stopwords and 1-char tokens.
-fn tokenize(text: &str) -> Vec<String> {
-    text.to_lowercase()
-        .split(|c: char| !c.is_alphanumeric())
-        .filter(|w| w.len() > 1 && !is_stopword(w))
-        .map(|w| w.to_string())
-        .collect()
-}
+pub type SharedStore = Arc<RagSystem>;
 
-// ── Public types ─────────────────────────────────────────────────────────────
+impl RagSystem {
+    /// Open the system against the on-disk store described by `cfg`, optionally
+    /// with an embedding provider already loaded (tests inject a mock). The
+    /// store dimension comes from the embedder if present, else `cfg.embedding_dim`.
+    pub fn open(cfg: RagConfig, embedder: Option<Arc<dyn EmbeddingProvider>>) -> Result<Self> {
+        let dim = embedder
+            .as_ref()
+            .map(|e| e.dimension())
+            .unwrap_or(cfg.embedding_dim);
+        let store = SqliteVecStore::open(&cfg.db_path, dim)?;
 
-#[derive(Debug, Clone, Serialize)]
-pub struct Hit {
-    pub text:   String,
-    pub source: String,
-    pub score:  f32,
-}
-
-/// One stored chunk: its text, source file, and precomputed token statistics.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct StoredChunk {
-    text:      String,
-    source:    String,
-    /// term -> frequency within this chunk
-    term_freq: HashMap<String, u32>,
-    /// total token count of this chunk (for BM25 length normalisation)
-    length:    u32,
-}
-
-/// The in-memory / on-disk index.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct VectorStore {
-    fingerprint: String,
-    chunks:      Vec<StoredChunk>,
-}
-
-pub type SharedStore = Arc<RwLock<VectorStore>>;
-
-pub fn new_shared_store() -> SharedStore {
-    Arc::new(RwLock::new(VectorStore::default()))
-}
-
-// ── BM25 scoring ─────────────────────────────────────────────────────────────
-
-/// Score every chunk against the query tokens and return the top k as Hits.
-fn bm25_search(chunks: &[StoredChunk], query: &str, k: usize) -> Vec<Hit> {
-    let q_tokens: Vec<String> = {
-        let mut t = tokenize(query);
-        t.sort();
-        t.dedup();
-        t
-    };
-    if q_tokens.is_empty() || chunks.is_empty() {
-        return Vec::new();
-    }
-
-    let n = chunks.len() as f32;
-    let avgdl = chunks.iter().map(|c| c.length as f32).sum::<f32>() / n;
-
-    // Document frequency: how many chunks contain each query term.
-    let mut df: HashMap<&str, u32> = HashMap::new();
-    for qt in &q_tokens {
-        let count = chunks.iter().filter(|c| c.term_freq.contains_key(qt)).count() as u32;
-        df.insert(qt.as_str(), count);
-    }
-
-    let mut scored: Vec<Hit> = chunks.iter().map(|c| {
-        let mut score = 0.0f32;
-        for qt in &q_tokens {
-            let dfq = *df.get(qt.as_str()).unwrap_or(&0);
-            if dfq == 0 { continue; }
-            let tf = *c.term_freq.get(qt).unwrap_or(&0) as f32;
-            if tf == 0.0 { continue; }
-            // BM25 IDF (with +1 to keep it positive).
-            let idf = ((n - dfq as f32 + 0.5) / (dfq as f32 + 0.5) + 1.0).ln();
-            let denom = tf + BM25_K1 * (1.0 - BM25_B + BM25_B * c.length as f32 / avgdl);
-            score += idf * (tf * (BM25_K1 + 1.0)) / denom;
+        // Rebuild the in-memory BM25 index from whatever is already on disk.
+        let mut bm25 = Bm25Index::new();
+        for chunk in store.all_chunks()? {
+            bm25.add(&chunk);
         }
-        Hit { text: c.text.clone(), source: c.source.clone(), score }
-    }).collect();
-
-    // Keep only chunks that actually matched something.
-    scored.retain(|h| h.score > 0.0);
-    scored.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
-    scored.truncate(k);
-
-    // Normalise scores to 0..1 for a friendly "% match" in the UI.
-    if let Some(max) = scored.first().map(|h| h.score) {
-        if max > 0.0 {
-            for h in scored.iter_mut() { h.score /= max; }
+        if !bm25.is_empty() {
+            info!("Rebuilt BM25 index from disk ({} chunks)", bm25.len());
         }
+
+        Ok(Self {
+            cfg,
+            store,
+            bm25: RwLock::new(bm25),
+            embedder: RwLock::new(embedder),
+        })
     }
-    scored
-}
 
-// ── Document loading ─────────────────────────────────────────────────────────
+    /// Clone out the current embedding provider, if one is loaded.
+    fn embedder(&self) -> Option<Arc<dyn EmbeddingProvider>> {
+        self.embedder
+            .read()
+            .expect("embedder lock poisoned")
+            .clone()
+    }
 
-fn load_txt(path: &Path) -> Result<String> {
-    Ok(std::fs::read_to_string(path)?)
-}
+    /// Install an embedding provider (called after the model loads in the
+    /// background). Refuses a provider whose dimension doesn't match the store.
+    pub fn set_embedder(&self, provider: Arc<dyn EmbeddingProvider>) {
+        if provider.dimension() != self.store.dimension() {
+            warn!(
+                "Embedding model '{}' has dimension {} but the vector store is {}; \
+                 keeping keyword-only retrieval. Run rebuild after fixing the model.",
+                provider.name(),
+                provider.dimension(),
+                self.store.dimension()
+            );
+            return;
+        }
+        info!("Embedding model active: {}", provider.name());
+        *self.embedder.write().expect("embedder lock poisoned") = Some(provider);
+    }
 
-// PDF text extraction happens in the browser (pdf.js) and is sent as plain text
-// to /api/upload, so the backend never parses PDF bytes.
+    /// Embed texts off the async runtime (embedding is blocking CPU work).
+    async fn embed_texts(&self, texts: Vec<String>) -> Result<Vec<Vec<f32>>> {
+        let emb = self
+            .embedder()
+            .ok_or_else(|| anyhow::anyhow!("no embedding model is available"))?;
+        tokio::task::spawn_blocking(move || emb.embed(&texts))
+            .await
+            .context("embedding task failed")?
+    }
 
-struct Doc {
-    source:  String,
-    content: String,
-}
+    /// Public entry point to chunk, embed, and index one document. Replaces any
+    /// existing chunks for the same source (idempotent re-upload).
+    pub async fn add_document(&self, source: &str, content: &str) -> Result<usize> {
+        self.ingest(source, content).await
+    }
 
-fn load_all(data_dir: &str) -> Result<Vec<Doc>> {
-    let mut docs = Vec::new();
-    let entries  = std::fs::read_dir(data_dir)
-        .with_context(|| format!("opening data dir '{data_dir}'"))?;
+    /// Chunk + embed (or store text-only) + index one document. Replaces any
+    /// existing chunks for the same source (idempotent re-upload).
+    async fn ingest(&self, source: &str, content: &str) -> Result<usize> {
+        let chunks = chunk::chunk_document(&self.cfg, source, content);
+        if chunks.is_empty() {
+            anyhow::bail!("No readable text found in '{source}'.");
+        }
+        let n = chunks.len();
 
-    for entry in entries {
-        let entry = entry?;
-        let path  = entry.path();
-        if !path.is_file() { continue; }
+        if self.embedder().is_some() {
+            let texts: Vec<String> = chunks.iter().map(|c| c.text.clone()).collect();
+            info!("Embedding {n} chunks from '{source}'…");
+            let vectors = self.embed_texts(texts).await?;
+            self.store
+                .upsert(&chunks, &vectors)
+                .with_context(|| format!("storing vectors for '{source}'"))?;
+        } else {
+            warn!("No embedding model available — indexing '{source}' for keyword search only.");
+            self.store
+                .insert_text_only(&chunks)
+                .with_context(|| format!("storing chunks for '{source}'"))?;
+        }
 
-        let ext    = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
-        let source = path.file_name().unwrap().to_string_lossy().into_owned();
+        // Refresh the in-memory BM25 index for this source.
+        {
+            let mut bm25 = self.bm25.write().expect("bm25 lock poisoned");
+            bm25.remove_source(source);
+            for c in &chunks {
+                bm25.add(c);
+            }
+        }
+        info!("Indexed '{source}' ({n} chunks)");
+        Ok(n)
+    }
 
-        let content = match ext.as_str() {
-            "txt" | "md" => load_txt(&path)?,
-            _            => { warn!("skipping unsupported file: {source}"); continue; }
+    /// Index every supported document in the data directory. Returns the sources
+    /// that were (re)indexed.
+    async fn index_data_dir(&self) -> Result<Vec<String>> {
+        let docs = load_all(&self.cfg.data_dir)?;
+        if docs.is_empty() {
+            warn!("No documents found in '{}'", self.cfg.data_dir);
+        }
+        let mut sources = Vec::new();
+        for doc in docs {
+            match self.ingest(&doc.source, &doc.content).await {
+                Ok(_) => sources.push(doc.source),
+                // Never silently swallow indexing failures.
+                Err(e) => warn!("Skipping '{}': {e:#}", doc.source),
+            }
+        }
+        Ok(sources)
+    }
+
+    /// Run a retrieval and report the effective mode + whether the evidence is
+    /// confident enough to answer from.
+    pub async fn retrieve(
+        &self,
+        query: &str,
+        top_k: usize,
+        requested: RetrievalMode,
+        min_similarity: f32,
+    ) -> Result<RetrievalResult> {
+        let have_vectors = self.embedder().is_some() && self.store.count().unwrap_or(0) > 0;
+
+        // Degrade gracefully when no embeddings are available.
+        let mode = match requested {
+            RetrievalMode::Keyword => RetrievalMode::Keyword,
+            RetrievalMode::Vector if have_vectors => RetrievalMode::Vector,
+            RetrievalMode::Hybrid if have_vectors => RetrievalMode::Hybrid,
+            other => {
+                warn!(
+                    "{} retrieval requested but no embeddings available; using keyword",
+                    other.as_str()
+                );
+                RetrievalMode::Keyword
+            }
         };
-        docs.push(Doc { source, content });
+
+        let keyword_hits = if mode != RetrievalMode::Vector {
+            self.bm25
+                .read()
+                .expect("bm25 lock poisoned")
+                .search(query, top_k)
+        } else {
+            Vec::new()
+        };
+        let keyword_found = !keyword_hits.is_empty();
+
+        let vector_hits = if mode != RetrievalMode::Keyword {
+            let qv = self
+                .embed_texts(vec![query.to_string()])
+                .await?
+                .pop()
+                .ok_or_else(|| anyhow::anyhow!("query embedding produced no vector"))?;
+            self.store.search(&qv, top_k)?
+        } else {
+            Vec::new()
+        };
+        let best_vec_sim = vector_hits.first().map(|h| h.score).unwrap_or(0.0);
+
+        let hits = match mode {
+            RetrievalMode::Keyword => keyword_hits,
+            RetrievalMode::Vector => vector_hits,
+            RetrievalMode::Hybrid => {
+                hybrid::reciprocal_rank_fusion(&[keyword_hits, vector_hits], top_k)
+            }
+        };
+
+        // Confidence: a keyword hit means real term overlap; a vector hit counts
+        // only if it clears the similarity threshold.
+        let confident = !hits.is_empty()
+            && match mode {
+                RetrievalMode::Keyword => true,
+                RetrievalMode::Vector => best_vec_sim >= min_similarity,
+                RetrievalMode::Hybrid => keyword_found || best_vec_sim >= min_similarity,
+            };
+
+        Ok(RetrievalResult {
+            hits,
+            mode,
+            confident,
+        })
     }
-    docs.sort_by(|a, b| a.source.cmp(&b.source));
-    Ok(docs)
 }
 
-// ── Chunking ─────────────────────────────────────────────────────────────────
-
-fn make_chunk(source: &str, text: &str) -> StoredChunk {
-    let tokens = tokenize(text);
-    let length = tokens.len() as u32;
-    let mut term_freq: HashMap<String, u32> = HashMap::new();
-    for t in tokens {
-        *term_freq.entry(t).or_insert(0) += 1;
-    }
-    StoredChunk { text: text.to_string(), source: source.to_string(), term_freq, length }
+/// Result of a retrieval, with provenance for the prompt builder and callers.
+pub struct RetrievalResult {
+    /// Ranked, deduplicated hits with metadata and scores.
+    pub hits: Vec<Hit>,
+    /// The mode actually used (may differ from the request if it had to
+    /// degrade to keyword because no embeddings were available).
+    pub mode: RetrievalMode,
+    /// Whether there is enough relevant evidence to answer confidently.
+    pub confident: bool,
 }
 
-fn chunk_docs(docs: Vec<Doc>) -> Vec<StoredChunk> {
-    let splitter = TextSplitter::new(CHUNK_SIZE);
-    let mut chunks = Vec::new();
-    for doc in docs {
-        for piece in splitter.chunks(&doc.content) {
-            let trimmed = piece.trim();
-            if trimmed.len() < 40 { continue; }
-            chunks.push(make_chunk(&doc.source, trimmed));
+// ── Public API (kept compatible with the rest of the app) ────────────────────
+
+/// Create the shared store, opening the on-disk vector database. No embedding
+/// model is loaded yet — call [`init_embedder`] (usually in the background).
+pub fn new_shared_store(cfg: &Config) -> Result<SharedStore> {
+    let rag_cfg = RagConfig::from_app_config(cfg);
+    let system = RagSystem::open(rag_cfg, None)?;
+    Ok(Arc::new(system))
+}
+
+/// Attempt to load the local embedding model and install it on the store. Best
+/// effort: on failure the system keeps working in keyword-only mode. This may
+/// download the model on first run (then it is cached for offline use).
+pub async fn init_embedder(_cfg: &Config, store: &SharedStore) {
+    #[cfg(feature = "local-embeddings")]
+    {
+        let model = store.cfg.embedding_model.clone();
+        let built = tokio::task::spawn_blocking(move || {
+            fastembed_provider::LocalFastEmbedProvider::new(&model)
+        })
+        .await;
+        match built {
+            Ok(Ok(provider)) => store.set_embedder(Arc::new(provider)),
+            Ok(Err(e)) => warn!(
+                "Local embedding model unavailable, falling back to keyword (BM25) search: {e:#}"
+            ),
+            Err(e) => warn!("Embedding model load task failed: {e}"),
         }
     }
-    chunks
+    #[cfg(not(feature = "local-embeddings"))]
+    {
+        let _ = store;
+        info!("Built without the 'local-embeddings' feature — using keyword (BM25) retrieval.");
+    }
 }
 
-// ── Persistence ──────────────────────────────────────────────────────────────
-
-fn load_persisted() -> Option<VectorStore> {
-    let text = std::fs::read_to_string(STORE_PATH).ok()?;
-    serde_json::from_str(&text).ok()
-}
-
-fn save_persisted(store: &VectorStore) -> Result<()> {
-    let text = serde_json::to_string(store).context("serializing index")?;
-    std::fs::write(STORE_PATH, text).context("writing index.json")?;
+/// Build the index from the documents in the data directory. Reuses whatever is
+/// already persisted on disk and adds/refreshes the data-dir documents.
+pub async fn build_index(
+    _client: &reqwest::Client,
+    _cfg: &Config,
+    store: &SharedStore,
+) -> Result<()> {
+    info!("Indexing documents from '{}'", store.cfg.data_dir);
+    let sources = store.index_data_dir().await?;
+    info!(
+        "Index ready ({} sources, {} chunks)",
+        sources.len(),
+        store.store.count().unwrap_or(0)
+    );
     Ok(())
 }
 
-fn fingerprint(chunks: &[StoredChunk]) -> String {
-    // Cheap content fingerprint: chunk count + total length + a sample of sources.
-    let total_len: u32 = chunks.iter().map(|c| c.length).sum();
-    let mut srcs: Vec<&str> = chunks.iter().map(|c| c.source.as_str()).collect();
-    srcs.sort();
-    srcs.dedup();
-    format!("{}-{}-{}", chunks.len(), total_len, srcs.join(","))
-}
-
-// ── Public: build index ──────────────────────────────────────────────────────
-
-/// Build the in-memory index from the documents in data/. Reuses a persisted
-/// index when the corpus is unchanged, and never clobbers user uploads.
-pub async fn build_index(_client: &reqwest::Client, cfg: &Config, store: &SharedStore) -> Result<()> {
-    info!("Loading documents from '{}'", cfg.data_dir);
-    let docs   = load_all(&cfg.data_dir)?;
-    let chunks = chunk_docs(docs);
-    info!("Chunked into {} pieces", chunks.len());
-
-    if chunks.is_empty() {
-        // Not fatal — the user may rely entirely on uploads.
-        warn!("No documents found in '{}'", cfg.data_dir);
-    }
-
-    let fp = fingerprint(&chunks);
-
-    if let Some(persisted) = load_persisted() {
-        let has_uploads = persisted.fingerprint.starts_with("custom-");
-        if (persisted.fingerprint == fp || has_uploads) && !persisted.chunks.is_empty() {
-            info!("Reusing persisted index ({} chunks)", persisted.chunks.len());
-            *store.write().await = persisted;
-            return Ok(());
-        }
-        info!("Persisted index is stale, rebuilding");
-    }
-
-    let new_store = VectorStore { fingerprint: fp, chunks };
-    if let Err(e) = save_persisted(&new_store) {
-        warn!("Could not persist index.json: {e}");
-    }
-    *store.write().await = new_store;
-    info!("Index ready");
-    Ok(())
-}
-
-/// Add one uploaded document to the live index: chunk it, tokenize, append,
-/// re-persist. Returns the number of chunks added.
+/// Add one uploaded document to the live index. Returns chunks added.
 pub async fn add_file(
     _client: &reqwest::Client,
-    _cfg:    &Config,
-    store:   &SharedStore,
-    source:  &str,
+    _cfg: &Config,
+    store: &SharedStore,
+    source: &str,
     content: &str,
 ) -> Result<usize> {
-    let doc = Doc { source: source.to_string(), content: content.to_string() };
-    let chunks = chunk_docs(vec![doc]);
-    if chunks.is_empty() {
-        anyhow::bail!("No readable text found in '{source}'.");
-    }
-    let added = chunks.len();
-    {
-        let mut guard = store.write().await;
-        guard.chunks.retain(|c| c.source != source);   // replace on re-upload
-        guard.chunks.extend(chunks);
-        guard.fingerprint = format!("custom-{}", guard.chunks.len());
-        let snapshot = guard.clone();
-        if let Err(e) = save_persisted(&snapshot) {
-            warn!("Could not persist after upload: {e}");
-        }
-    }
-    info!("Added {added} chunks from uploaded file '{source}'");
-    Ok(added)
+    store.ingest(source, content).await
 }
 
 /// List distinct source documents with chunk counts.
 pub async fn list_sources(store: &SharedStore) -> Vec<(String, usize)> {
-    let guard = store.read().await;
-    let mut counts: std::collections::BTreeMap<String, usize> = Default::default();
-    for c in &guard.chunks {
-        *counts.entry(c.source.clone()).or_insert(0) += 1;
-    }
-    counts.into_iter().collect()
+    store.store.list_sources().unwrap_or_default()
 }
 
-/// Remove all chunks belonging to a named source. Returns true if any removed.
+/// Remove all chunks for a named source from both the vector store and BM25.
 pub async fn remove_source(store: &SharedStore, name: &str) -> bool {
-    let mut guard = store.write().await;
-    let before = guard.chunks.len();
-    guard.chunks.retain(|c| c.source != name);
-    let removed = guard.chunks.len() != before;
+    let removed = store.store.delete_source(name).unwrap_or(0) > 0;
     if removed {
-        guard.fingerprint = format!("custom-{}", guard.chunks.len());
-        let snapshot = guard.clone();
-        if let Err(e) = save_persisted(&snapshot) {
-            warn!("Could not persist after removal: {e}");
-        }
+        store
+            .bm25
+            .write()
+            .expect("bm25 lock poisoned")
+            .remove_source(name);
     }
     removed
 }
 
-// ── Public: retrieve ─────────────────────────────────────────────────────────
+/// Safe rebuild: recreate the local vector index from everything currently
+/// indexed (data-dir documents are re-read from disk; uploaded documents are
+/// re-embedded from their stored chunks). Returns the chunk count afterwards.
+pub async fn rebuild(
+    _client: &reqwest::Client,
+    _cfg: &Config,
+    store: &SharedStore,
+) -> Result<usize> {
+    info!("Rebuilding local vector index…");
+    // Snapshot what's indexed, then wipe and recreate.
+    let snapshot = store.store.all_chunks()?;
+    store.store.clear()?;
+    store.bm25.write().expect("bm25 lock poisoned").clear();
+
+    // Re-read on-disk documents (picks up edits / additions / removals).
+    let fresh_sources: std::collections::BTreeSet<String> =
+        store.index_data_dir().await?.into_iter().collect();
+
+    // Re-index uploaded documents (those not backed by a data-dir file) from
+    // their stored chunks, so nothing the user uploaded is lost.
+    let mut upload_chunks: Vec<types::StoredChunk> = snapshot
+        .into_iter()
+        .filter(|c| !fresh_sources.contains(&c.source))
+        .collect();
+    upload_chunks.sort_by(|a, b| a.source.cmp(&b.source).then(a.chunk_id.cmp(&b.chunk_id)));
+
+    if !upload_chunks.is_empty() {
+        if store.embedder().is_some() {
+            let texts: Vec<String> = upload_chunks.iter().map(|c| c.text.clone()).collect();
+            let vectors = store.embed_texts(texts).await?;
+            store.store.upsert(&upload_chunks, &vectors)?;
+        } else {
+            store.store.insert_text_only(&upload_chunks)?;
+        }
+        let mut bm25 = store.bm25.write().expect("bm25 lock poisoned");
+        for c in &upload_chunks {
+            bm25.add(c);
+        }
+    }
+
+    let count = store.store.count()?;
+    info!("Rebuild complete ({count} chunks)");
+    Ok(count)
+}
+
+// ── Retrieve (used by /api/rag) ──────────────────────────────────────────────
 
 pub async fn retrieve(
     _client: &reqwest::Client,
-    _cfg:    &Config,
-    store:   &SharedStore,
-    query:   &str,
-    k:       usize,
+    cfg: &Config,
+    store: &SharedStore,
+    query: &str,
+    k: usize,
 ) -> Result<Vec<Hit>> {
-    let guard = store.read().await;
-    if guard.chunks.is_empty() {
+    if store.store.count().unwrap_or(0) == 0
+        && store.bm25.read().expect("bm25 lock poisoned").is_empty()
+    {
         anyhow::bail!("No documents are loaded yet. Add a document first.");
     }
-    Ok(bm25_search(&guard.chunks, query, k))
+    let mode = RetrievalMode::parse(&cfg.retrieval_mode);
+    let top_k = if k == 0 { cfg.top_k.max(1) } else { k };
+    let result = store
+        .retrieve(query, top_k, mode, cfg.min_similarity)
+        .await?;
+    Ok(result.hits)
 }
 
-// ── Context building (NotebookLM-style: docs live in the model's context) ─────
-
-/// Roughly 4 characters per token. We budget by characters to stay simple.
-/// ~32k chars ≈ ~8k tokens, which fits comfortably inside Groq's free-tier
-/// limit of 12k tokens/minute (leaving room for the prompt, conversation, and
-/// reply). If you're on a paid tier with a larger limit, this can be raised.
-const CONTEXT_CHAR_BUDGET: usize = 32_000;
+// ── Context building for the chat/agent layer ────────────────────────────────
 
 /// If the user's message clearly refers to ONE specific loaded document, return
-/// that document's source name. This lets "summarize the dario txt" load only
-/// dario.txt instead of the whole library — faster and far fewer tokens.
+/// that document's source name (so e.g. "summarize pricing.md" focuses on it).
 fn matched_document(message: &str, sources: &[String]) -> Option<String> {
     let msg = message.to_lowercase();
-    let mut best: Option<(usize, &String)> = None; // (match length, source)
+    let mut best: Option<(usize, &String)> = None;
     for src in sources {
-        // Compare against the filename and its stem (without extension).
         let lower = src.to_lowercase();
-        let stem  = lower.rsplit_once('.').map(|(s, _)| s).unwrap_or(&lower);
-        // Build candidate keys: full name, stem, and stem with separators as spaces.
+        let stem = lower.rsplit_once('.').map(|(s, _)| s).unwrap_or(&lower);
         let stem_spaced = stem.replace(['_', '-'], " ");
         for key in [lower.as_str(), stem, stem_spaced.as_str()] {
-            if key.len() >= 3 && msg.contains(key) {
-                // Prefer the longest, most specific match.
-                if best.map(|(len, _)| key.len() > len).unwrap_or(true) {
-                    best = Some((key.len(), src));
-                }
+            if key.len() >= 3
+                && msg.contains(key)
+                && best.map(|(len, _)| key.len() > len).unwrap_or(true)
+            {
+                best = Some((key.len(), src));
             }
         }
     }
@@ -368,54 +435,62 @@ fn matched_document(message: &str, sources: &[String]) -> Option<String> {
 /// Build the document context placed in front of the model each turn.
 ///
 ///   * If the user names a specific document, include only that one (in full).
-///   * Else if all documents fit the budget, include them all (in full) — so
-///     the model genuinely knows them and summaries/subject questions just work.
-///   * Else include the excerpts most relevant to the message (BM25) up to the
-///     budget, so large libraries still work.
+///   * Else if the whole corpus fits the budget, include it all (so summaries
+///     and broad questions just work — preserved NotebookLM behaviour).
+///   * Else run hybrid retrieval and include the top cited chunks. If retrieval
+///     confidence is low, instruct the model to say it lacks evidence rather
+///     than guessing.
 ///
 /// Returns (context_text, included_sources, truncated).
-pub async fn build_context(store: &SharedStore, message: &str) -> (String, Vec<String>, bool) {
-    let guard = store.read().await;
-    if guard.chunks.is_empty() {
+pub async fn build_context(
+    store: &SharedStore,
+    cfg: &Config,
+    message: &str,
+) -> (String, Vec<String>, bool) {
+    let all_chunks = store.bm25.read().expect("bm25 lock poisoned").all_chunks();
+    if all_chunks.is_empty() {
         return (String::new(), Vec::new(), false);
     }
 
-    // Group chunks back into whole documents, preserving order.
+    // Group chunks back into documents, preserving first-seen order.
     let mut doc_order: Vec<String> = Vec::new();
-    let mut by_source: std::collections::HashMap<String, Vec<&StoredChunk>> = Default::default();
-    for c in &guard.chunks {
-        if !by_source.contains_key(&c.source) {
-            doc_order.push(c.source.clone());
+    let mut by_source: std::collections::HashMap<String, Vec<String>> = Default::default();
+    for (source, text) in &all_chunks {
+        if !by_source.contains_key(source) {
+            doc_order.push(source.clone());
         }
-        by_source.entry(c.source.clone()).or_default().push(c);
+        by_source
+            .entry(source.clone())
+            .or_default()
+            .push(text.clone());
     }
 
-    // 1) Did the user name a specific document?
+    // 1) User named a specific document.
     if let Some(target) = matched_document(message, &doc_order) {
-        let chunks = &by_source[&target];
-        let mut out = String::new();
-        out.push_str(&format!("\n===== DOCUMENT: {target} =====\n"));
+        let mut out = format!("\n===== DOCUMENT: {target} =====\n");
         let mut used = 0usize;
         let mut truncated = false;
-        for c in chunks {
-            if used + c.text.len() > CONTEXT_CHAR_BUDGET { truncated = true; break; }
-            out.push_str(&c.text);
+        for text in &by_source[&target] {
+            if used + text.len() > CONTEXT_CHAR_BUDGET {
+                truncated = true;
+                break;
+            }
+            out.push_str(text);
             out.push('\n');
-            used += c.text.len();
+            used += text.len();
         }
         return (out, vec![target], truncated);
     }
 
-    // 2) Does everything fit? Include all documents in full.
-    let total_chars: usize = guard.chunks.iter().map(|c| c.text.len()).sum();
+    // 2) Whole corpus fits — include everything.
+    let total_chars: usize = all_chunks.iter().map(|(_, t)| t.len()).sum();
     if total_chars <= CONTEXT_CHAR_BUDGET {
         let mut out = String::new();
         let mut sources = Vec::new();
         for src in &doc_order {
-            let chunks = &by_source[src];
             out.push_str(&format!("\n===== DOCUMENT: {src} =====\n"));
-            for c in chunks {
-                out.push_str(&c.text);
+            for text in &by_source[src] {
+                out.push_str(text);
                 out.push('\n');
             }
             sources.push(src.clone());
@@ -423,25 +498,113 @@ pub async fn build_context(store: &SharedStore, message: &str) -> (String, Vec<S
         return (out, sources, false);
     }
 
-    // 3) Too big: include the most relevant excerpts up to the budget.
-    let ranked = bm25_search(&guard.chunks, message, 10_000);
-    let selected: Vec<Hit> = if ranked.is_empty() {
-        guard.chunks.iter().take(40).map(|c| Hit {
-            text: c.text.clone(), source: c.source.clone(), score: 0.0,
-        }).collect()
-    } else {
-        ranked
+    // 3) Large corpus — hybrid retrieval of the most relevant cited chunks.
+    let mode = RetrievalMode::parse(&cfg.retrieval_mode);
+    let top_k = cfg.top_k.max(1);
+    let retrieval = match store
+        .retrieve(message, top_k, mode, cfg.min_similarity)
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            warn!("Retrieval failed while building context: {e:#}");
+            RetrievalResult {
+                hits: Vec::new(),
+                mode,
+                confident: false,
+            }
+        }
     };
 
-    let mut out = String::new();
-    out.push_str("\n(Showing the most relevant excerpts from your documents.)\n");
+    if !retrieval.confident || retrieval.hits.is_empty() {
+        let note = "\n(No sufficiently relevant passages were found in the uploaded documents for \
+                    this question. Tell the user you could not find enough evidence in their files \
+                    to answer confidently, rather than guessing.)\n";
+        return (note.to_string(), Vec::new(), true);
+    }
+
+    let mut out = format!(
+        "\n(The most relevant excerpts from your documents, retrieved by {} search. Each is \
+         labelled with its source so you can cite it.)\n",
+        retrieval.mode.as_str()
+    );
     let mut used = 0usize;
     let mut sources_set: std::collections::BTreeSet<String> = Default::default();
-    for h in selected {
-        if used + h.text.len() > CONTEXT_CHAR_BUDGET { break; }
-        out.push_str(&format!("\n----- from {} -----\n{}\n", h.source, h.text));
+    for h in &retrieval.hits {
+        if used + h.text.len() > CONTEXT_CHAR_BUDGET {
+            break;
+        }
+        let tag = match h.retrieval {
+            HitSource::Keyword => "keyword",
+            HitSource::Vector => "semantic",
+            HitSource::Hybrid => "hybrid",
+        };
+        out.push_str(&format!(
+            "\n----- from {} (chunk {}, {} match, score {:.2}) -----\n{}\n",
+            h.source, h.chunk_id, tag, h.score, h.text
+        ));
         used += h.text.len();
         sources_set.insert(h.source.clone());
     }
     (out, sources_set.into_iter().collect(), true)
+}
+
+// ── Document loading ─────────────────────────────────────────────────────────
+
+struct Doc {
+    source: String,
+    content: String,
+}
+
+fn load_all(data_dir: &str) -> Result<Vec<Doc>> {
+    let mut docs = Vec::new();
+    let entries = match std::fs::read_dir(data_dir) {
+        Ok(e) => e,
+        Err(e) => {
+            warn!("Could not read data dir '{data_dir}': {e}");
+            return Ok(docs);
+        }
+    };
+
+    for entry in entries {
+        let entry = entry?;
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+        let source = path.file_name().unwrap().to_string_lossy().into_owned();
+
+        // Skip the vector database files that live alongside the documents.
+        if matches!(ext.as_str(), "sqlite" | "db" | "sqlite-wal" | "sqlite-shm")
+            || source.starts_with("rag_vectors")
+        {
+            continue;
+        }
+
+        let content = match ext.as_str() {
+            "txt" | "md" | "markdown" | "text" => match load_txt(&path) {
+                Ok(c) => c,
+                Err(e) => {
+                    warn!("Could not read '{source}': {e}");
+                    continue;
+                }
+            },
+            _ => {
+                warn!("Skipping unsupported file: {source}");
+                continue;
+            }
+        };
+        docs.push(Doc { source, content });
+    }
+    docs.sort_by(|a, b| a.source.cmp(&b.source));
+    Ok(docs)
+}
+
+fn load_txt(path: &Path) -> Result<String> {
+    Ok(std::fs::read_to_string(path)?)
 }

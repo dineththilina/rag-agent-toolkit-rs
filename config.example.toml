@@ -16,9 +16,8 @@ api_key = ""
 # Chat model id (must exist on the chosen API — the UI fetches the live list).
 model = "gpt-4o-mini"
 
-# Embeddings. Usually the same API; leave base/key blank to reuse the chat API.
-# For chat providers without embeddings (e.g. Groq), point these at OpenAI or
-# a local Ollama running an embedding model.
+# Legacy OpenAI-style embedding endpoint fields. Unused by the local vector RAG
+# (embeddings run locally via fastembed); kept only for config compatibility.
 embeddings_base  = ""
 embeddings_key   = ""
 embeddings_model = "text-embedding-3-small"
@@ -26,5 +25,22 @@ embeddings_model = "text-embedding-3-small"
 # Directory of documents to ingest.
 data_dir = "data"
 
-# Note: the vector index is stored in vectors.json (created automatically).
-# Delete it to force a rebuild after changing documents.
+# ── Local vector RAG ─────────────────────────────────────────────────────────
+# Retrieval mode: "keyword" (BM25 only), "vector" (semantic only), or "hybrid".
+retrieval_mode = "hybrid"
+
+# How many chunks to retrieve.
+top_k = 8
+
+# Minimum cosine similarity (0..1) for a vector hit to count as confident
+# evidence. Below this, the assistant says it couldn't find enough evidence.
+min_similarity = 0.2
+
+# Local embedding model (fastembed). all-MiniLM-L6-v2 is a small English
+# retrieval model with 384 dimensions. Other options: "bge-small-en-v1.5".
+embedding_model = "all-MiniLM-L6-v2"
+embedding_dim   = 384
+
+# Local, on-disk vector database (SQLite + sqlite-vec). No cloud, no Docker.
+# Delete this file or POST /api/rebuild to recreate the index.
+vector_db_path = "data/rag_vectors.sqlite"

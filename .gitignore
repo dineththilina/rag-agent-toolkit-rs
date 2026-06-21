@@ -4,14 +4,20 @@
 # Local config with secrets
 config.toml
 
-# Qdrant local storage (if running embedded)
-/qdrant_storage
-
 # OS / editor
 .DS_Store
 .idea/
 .vscode/
 *.swp
 
-# Search index (rebuilt on launch)
+# Legacy BM25 search index (no longer used; kept ignored for old checkouts)
 index.json
+
+# Local vector database (SQLite + sqlite-vec), created under data/
+data/rag_vectors.sqlite
+data/rag_vectors.sqlite-*
+*.sqlite-wal
+*.sqlite-shm
+
+# Cached embedding model weights (downloaded on first run by fastembed)
+.fastembed_cache/
