@@ -121,6 +121,11 @@ body{
 .msg.user .bubble{background:linear-gradient(135deg,var(--lav-bg),var(--sky-bg));
   border:1px solid var(--line);border-bottom-right-radius:5px;color:var(--ink);}
 .msg.err .bubble{background:var(--blush-bg);border:1px solid var(--blush);color:#9c4555;}
+.err-actions{margin-top:11px;display:flex;gap:8px;}
+.retry-btn{background:#fff;color:#9c4555;border:1px solid var(--blush);border-radius:9px;
+  padding:6px 13px;font-size:.78rem;font-weight:600;cursor:pointer;font-family:inherit;
+  display:inline-flex;align-items:center;gap:6px;transition:background .15s;}
+.retry-btn:hover{background:var(--blush-bg);}
 
 /* Welcome card */
 .welcome{text-align:center;padding:42px 24px 12px;max-width:560px;margin:0 auto;}
@@ -308,6 +313,7 @@ details[open] .details-sum::before{content:'▾ ';}
   </div>
   <span class="badge" id="badge"></span>
   <div class="right">
+    <button class="icon-btn" title="New chat (clears saved history)" onclick="newChat()">✎</button>
     <button class="icon-btn" title="Settings" onclick="openDrawer()">⚙</button>
   </div>
 </div>
@@ -462,9 +468,28 @@ details[open] .details-sum::before{content:'▾ ';}
 
 <script>
 // ══ State ══
-const SESSION_ID = crypto.randomUUID();
 let selectedModel = '';
 let noticeShown = false;
+
+// ══ Local chat persistence (browser localStorage — nothing leaves your machine) ══
+// Saved chats survive page reloads and app restarts. The session id is kept
+// stable across reloads so the backend conversation continues while the server
+// is running; a server restart starts fresh backend memory, but the visible
+// transcript is always restored from local storage.
+const STORE_KEY      = 'agentToolkit.chat.v1';
+const SESSION_KEY    = 'agentToolkit.session.v1';
+const MAX_TRANSCRIPT = 200;
+const WELCOME_HTML   = (document.getElementById('welcome')||{}).outerHTML || '';
+let SESSION_ID = localStorage.getItem(SESSION_KEY);
+if(!SESSION_ID){ SESSION_ID = crypto.randomUUID(); try{ localStorage.setItem(SESSION_KEY, SESSION_ID); }catch(e){} }
+let transcript = [];
+function loadChat(){ try{ transcript = JSON.parse(localStorage.getItem(STORE_KEY)||'[]') || []; }catch(e){ transcript = []; } return transcript; }
+function saveChat(){ try{ localStorage.setItem(STORE_KEY, JSON.stringify(transcript.slice(-MAX_TRANSCRIPT))); }catch(e){} }
+function recordMsg(role,text,sources){
+  transcript.push({role:role,text:text,sources:sources||[]});
+  if(transcript.length>MAX_TRANSCRIPT) transcript=transcript.slice(-MAX_TRANSCRIPT);
+  saveChat();
+}
 
 const PRESETS = {
   groq:     { base:'https://api.groq.com/openai/v1', model:'llama-3.3-70b-versatile', emb:'local' },
@@ -484,6 +509,7 @@ const PRESETS = {
     if (!d.api_key_set && !isLocal) showKeyPrompt();
   } catch { setBadge('',''); }
   loadSources();
+  restoreChat();
   document.getElementById('chat-input').focus();
 })();
 
@@ -633,18 +659,57 @@ function addReason(tools,sources){
   g.appendChild(c);p.appendChild(g);
   chatEl.appendChild(p);scrollBottom();
 }
-async function sendChat(){
+function sendChat(){
   const text=chatInput.value.trim();if(!text)return;
-  chatInput.value='';chatInput.style.height='auto';chatSend.disabled=true;
-  addMsg('user',text);const loading=addLoading();
+  chatInput.value='';chatInput.style.height='auto';
+  addMsg('user',text);recordMsg('user',text);
+  runChat(text);
+}
+// Send one prompt to the model and render the reply, or a retryable error.
+async function runChat(text){
+  chatSend.disabled=true;
+  const loading=addLoading();
   try{
     const r=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({message:text,session_id:SESSION_ID})});
     const d=await r.json();loading.remove();
-    if(!r.ok){if(!handleFriendlyError(d.error))addMsg('err',d.error||'Something went wrong.');return;}
+    if(!r.ok){if(!handleFriendlyError(d.error))addError(text,d.error||'Something went wrong.');return;}
     addMsg('bot',d.answer||'(no reply)');addReason(d.tools_used,d.sources);
-  }catch(e){loading.remove();addMsg('err','Network error: '+e.message);}
+    recordMsg('bot',d.answer||'(no reply)',d.sources);
+  }catch(e){loading.remove();addError(text,'Network error: '+e.message);}
   finally{chatSend.disabled=false;chatInput.focus();}
+}
+// An error bubble with a Retry button that re-runs the same prompt in place
+// (no duplicate "You" message). Errors are not saved to the transcript.
+function addError(retryText,msg){
+  dismissWelcome();
+  const w=el('div','msg err');
+  w.appendChild(el('div','who','Error'));
+  const b=el('div','bubble');
+  b.appendChild(el('div',null,msg));
+  const act=el('div','err-actions');
+  const rb=el('button','retry-btn');rb.type='button';rb.textContent='↻ Retry';
+  rb.onclick=()=>{w.remove();runChat(retryText);};
+  act.appendChild(rb);b.appendChild(act);
+  w.appendChild(b);chatEl.appendChild(w);scrollBottom();return w;
+}
+// Re-render a saved chat from local storage (called once on boot).
+function restoreChat(){
+  const msgs=loadChat();
+  if(!msgs.length)return;
+  dismissWelcome();
+  for(const m of msgs){
+    if(m.role==='user')addMsg('user',m.text);
+    else{addMsg('bot',m.text);if(m.sources&&m.sources.length)addReason(null,m.sources);}
+  }
+}
+// Clear the saved chat and start a fresh conversation.
+function newChat(){
+  transcript=[];saveChat();
+  SESSION_ID=crypto.randomUUID();try{localStorage.setItem(SESSION_KEY,SESSION_ID);}catch(e){}
+  removeNotice();
+  chatEl.innerHTML=WELCOME_HTML;
+  chatInput.value='';chatInput.style.height='auto';chatInput.focus();
 }
 
 // ══ Documents: search shown inline in chat ══

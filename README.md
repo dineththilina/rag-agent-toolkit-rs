@@ -302,7 +302,11 @@ agent-toolkit-rs/
 - Embeddings are generated locally; the model is cached under
   `./.fastembed_cache` after the first download (override with
   `FASTEMBED_CACHE_DIR`).
-- Session memory is in-process (a `DashMap`); restarting the server clears it.
-  The document index, however, persists.
+- The chat transcript is saved locally in your browser (localStorage), so it
+  survives page reloads and app restarts; use the **✎ New chat** button to clear
+  it and start fresh. The backend conversation memory is in-process (a `DashMap`)
+  and resets when the server restarts, but the document index persists.
+- When a request fails (e.g. a provider rate-limit / 429), the error bubble shows
+  a **↻ Retry** button that re-runs the same prompt in place.
 - `config.toml` holds your chat API key in plaintext and is gitignored. Treat it
   like any local secrets file.
